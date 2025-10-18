@@ -8,7 +8,7 @@ Forge Kindle-compatible dictionaries for every language
 Install Kindle Previewer 3 first
 
 ```
-wikidict-kindle sr en
+dictforge sr en
 ```
 
 #### Load the dictionary onto your Kindle

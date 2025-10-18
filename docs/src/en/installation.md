@@ -34,3 +34,9 @@ In the terminal (command prompt), execute:
 ```bash
 pipx install dictforge
 ```
+
+## Kindle Previewer
+DictForge invokes Amazon's `kindlegen` utility to generate Kindle dictionaries. Install
+[Kindle Previewer 3](https://kdp.amazon.com/en_US/help/topic/G202131170) to bundle the
+binary into your system PATH. If you keep it in a custom location, run `dictforge` with
+`--kindlegen-path /path/to/kindlegen` so the CLI can find it.
