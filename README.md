@@ -5,12 +5,12 @@
 | Name                           |    Stmts |     Miss |   Cover |   Missing |
 |------------------------------- | -------: | -------: | ------: | --------: |
 | src/dictforge/\_\_about\_\_.py |        1 |        0 |    100% |           |
-| src/dictforge/builder.py       |       20 |       12 |     40% |15, 19, 33-36, 58-74 |
+| src/dictforge/builder.py       |       63 |       45 |     29% |17-25, 29-30, 33-35, 38-55, 70, 74, 88-95, 116-132 |
 | src/dictforge/config.py        |       38 |       27 |     29% |9-10, 22-23, 27, 31-38, 43-57 |
 | src/dictforge/kindle.py        |       16 |       12 |     25% |      8-26 |
 | src/dictforge/langutil.py      |       21 |       13 |     38% |38-41, 45-46, 50-61 |
-| src/dictforge/main.py          |       68 |       32 |     53% |79, 85-134, 142-152 |
-|                      **TOTAL** |  **164** |   **96** | **41%** |           |
+| src/dictforge/main.py          |       92 |       52 |     43% |82, 90-173, 181-191 |
+|                      **TOTAL** |  **231** |  **149** | **35%** |           |
 
 
 ## Setup coverage badge
