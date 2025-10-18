@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import sys
+from json import JSONDecodeError
 from pathlib import Path
 
 import rich_click as click
+from rich.console import Console
+from rich.text import Text
 
 from dictforge import __version__
 
-from .builder import Builder
+from .builder import Builder, KaikkiParseError
 from .config import config_path, load_config, save_config
 from .kindle import guess_kindlegen_path
 from .langutil import make_defaults, normalize_input_name
@@ -78,6 +81,8 @@ def cli(  # noqa: PLR0913
     if ctx.invoked_subcommand is not None:
         return
 
+    console = Console(stderr=True)
+
     if version:
         print(f"{__version__}")
         sys.exit(0)
@@ -95,9 +100,14 @@ def cli(  # noqa: PLR0913
 
     kindlegen = kindlegen_path or guess_kindlegen_path()
     if not kindlegen:
-        raise click.ClickException(
-            "kindlegen not found; install Kindle Previewer 3 or pass --kindlegen-path",
+        error_message = Text("kindlegen not found; install ", style="bold red")
+        error_message.append(
+            "Kindle Previewer 3",
+            style="link https://kdp.amazon.com/en_US/help/topic/G202131170",
         )
+        error_message.append(" or pass --kindlegen-path", style="bold red")
+        console.print(error_message)
+        raise SystemExit(1)
 
     include_pos_val = cfg["include_pos"] if include_pos is None else True
     try_fix_val = cfg["try_fix_inflections"] if try_fix_inflections is None else True
@@ -120,17 +130,46 @@ def cli(  # noqa: PLR0913
     b.ensure_download(force=False)
 
     in_langs = [in_lang_norm] + merge_list
-    b.build_dictionary(
-        in_langs=in_langs,
-        out_lang=out_lang_norm,
-        title=title_val,
-        shortname=short_val,
-        outdir=outdir_path,
-        kindlegen_path=kindlegen,
-        include_pos=include_pos_val,
-        try_fix_inflections=try_fix_val,
-        max_entries=max_entries,
-    )
+    try:
+        b.build_dictionary(
+            in_langs=in_langs,
+            out_lang=out_lang_norm,
+            title=title_val,
+            shortname=short_val,
+            outdir=outdir_path,
+            kindlegen_path=kindlegen,
+            include_pos=include_pos_val,
+            try_fix_inflections=try_fix_val,
+            max_entries=max_entries,
+        )
+    except KaikkiParseError as exc:
+        console.print(Text(str(exc), style="bold red"))
+        if getattr(exc, "excerpt", None):
+            console.print(Text("Response excerpt:", style="yellow"))
+            for line in exc.excerpt:
+                console.print(Text(line, style="dim"))
+        console.print(
+            "Kaikki returned data that is not JSON (often HTML when offline or blocked).",
+            style="yellow",
+        )
+        console.print(
+            "Check your internet connection or pre-download datasets as described in the docs.",
+            style="yellow",
+        )
+        raise SystemExit(1) from exc
+    except JSONDecodeError as exc:
+        error_message = Text(
+            "Failed to parse Kaikki data; the download returned non-JSON ",
+            style="bold red",
+        )
+        error_message.append("(often HTML when offline or blocked).")
+        console.print(error_message)
+        console.print(
+            "Check your internet connection or pre-download datasets as described in the docs.",
+            style="yellow",
+        )
+        raise SystemExit(1) from exc
+
     click.secho(f"DONE: {outdir_path}", fg="green", bold=True)
 
 

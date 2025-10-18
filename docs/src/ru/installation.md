@@ -40,5 +40,15 @@ pipx install dictforge
 ## Kindle Previewer
 DictForge использует служебную программу `kindlegen` для сборки словарей Kindle. Установите
 [Kindle Previewer 3](https://kdp.amazon.com/en_US/help/topic/G202131170), чтобы получить
-эту утилиту и добавить её в PATH. Если `kindlegen` находится в другом месте, запускайте
-`dictforge` с параметром `--kindlegen-path /путь/к/kindlegen`.
+эту утилиту и добавить её в PATH.
+
+С версии Kindle Previewer 3, Amazon перестала распространять kindlegen как отдельную утилиту — теперь она встроена
+в сам Kindle Previewer и не устанавливается глобально в систему.
+
+В статье [Installing Kindlegen](https://www.jutoh.com/kindlegen.html) описано как найти путь к ней.
+
+Указывайте путь перед языковыми аргументами:
+
+```bash
+dictforge --kindlegen-path="/Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen" sr en
+```

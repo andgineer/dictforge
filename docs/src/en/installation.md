@@ -38,5 +38,15 @@ pipx install dictforge
 ## Kindle Previewer
 DictForge invokes Amazon's `kindlegen` utility to generate Kindle dictionaries. Install
 [Kindle Previewer 3](https://kdp.amazon.com/en_US/help/topic/G202131170) to bundle the
-binary into your system PATH. If you keep it in a custom location, run `dictforge` with
-`--kindlegen-path /path/to/kindlegen` so the CLI can find it.
+binary into your system PATH.
+
+In newer versions of Kindle Previewer 3, Amazon has stopped distributing kindlegen as a separate utility — it is now embedded
+within Kindle Previewer itself and is not installed globally on the system.
+
+See in [Installing Kindlegen](https://www.jutoh.com/kindlegen.html) how to find the path.
+
+Place the path before the language arguments:
+
+```bash
+dictforge --kindlegen-path="/Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen" sr en
+```
