@@ -1,6 +1,6 @@
 # dictforge
 
-Forge Kindle-compatible dictionaries for every language 
+Forge Kindle-compatible dictionaries for every language
 
 
 ### Quick Start
@@ -44,4 +44,3 @@ dictforge --help
 !!! info "About"
     ![About](images/about.jpg)
     [About][dictforge.__about__]
-

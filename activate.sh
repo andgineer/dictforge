@@ -22,10 +22,8 @@ if ! (return 0 2>/dev/null) ; then
     exit 1
 fi
 
-
 if [[ ! -d ${VENV_FOLDER} ]] ; then
     unset CONDA_PREFIX  # if conda is installed, it will mess with the virtual env
-
     echo -e $CYAN"Creating virtual environment for python in ${VENV_FOLDER}"$NC
     START_TIME=$(date +%s)
 
@@ -39,7 +37,6 @@ if [[ ! -d ${VENV_FOLDER} ]] ; then
 
     if command -v uv &> /dev/null; then
         if uv venv ${VENV_FOLDER} --python=python${PRIMARY_PYTHON_VERSION}; then
-
             . ${VENV_FOLDER}/bin/activate
             uv sync --frozen
             END_TIME=$(date +%s)
@@ -49,10 +46,8 @@ if [[ ! -d ${VENV_FOLDER} ]] ; then
             return 1
         fi
     else
-
         echo -e $RED"Error: Astral's UV is not installed."$NC
         echo -e $YELLOW"Please install UV from https://github.com/astral-sh/uv before proceeding."$NC
-
         return 1
     fi
 else

@@ -57,37 +57,37 @@ jobs:
         with:
           fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PRIMARY_PYTHON_VERSION }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PRIMARY_PYTHON_VERSION }}
 
 
-    - name: Install uv environment
-      uses: andgineer/uv-venv@v3
+      - name: Install uv environment
+        uses: andgineer/uv-venv@v3
 
-    - name: Install dependencies
-      run: uv sync --frozen
+      - name: Install dependencies
+        run: uv sync --frozen
 
-    - name: Build package
-      run: uv build
+      - name: Build package
+        run: uv build
 
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        user: ${{ secrets.PYPI_USERNAME }}
-        password: ${{ secrets.PYPI_PASSWORD }}
-        packages-dir: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: ${{ secrets.PYPI_USERNAME }}
+          password: ${{ secrets.PYPI_PASSWORD }}
+          packages-dir: dist
 
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ env.RELEASE_VERSION }}
-        release_name: Release ${{ env.RELEASE_VERSION }}
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          release_name: Release ${{ env.RELEASE_VERSION }}
 
-        body: https://pypi.org/project/dictforge/${{ env.RELEASE_VERSION }}/
-        draft: false
-        prerelease: false
+          body: https://pypi.org/project/dictforge/${{ env.RELEASE_VERSION }}/
+          draft: false
+          prerelease: false

@@ -2,7 +2,7 @@
 [![Coverage](https://raw.githubusercontent.com/andgineer/dictforge/python-coverage-comment-action-data/badge.svg)](https://htmlpreview.github.io/?https://github.com/andgineer/dictforge/blob/python-coverage-comment-action-data/htmlcov/index.html)
 # dictforge
 
-Forge Kindle-compatible dictionaries for every language 
+Forge Kindle-compatible dictionaries for every language
 
 # Documentation
 

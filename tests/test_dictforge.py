@@ -1,5 +1,5 @@
 from dictforge import __version__
-from dictforge.main import dictforge
+from dictforge.main import cli
 from click.testing import CliRunner
 
 
@@ -9,6 +9,6 @@ def test_version():
 
 def test_version_option():
     runner = CliRunner()
-    result = runner.invoke(dictforge, ['--version'])
+    result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert __version__ in result.output

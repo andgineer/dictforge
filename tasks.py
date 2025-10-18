@@ -23,7 +23,6 @@ ALLOWED_DOC_LANGUAGES = get_allowed_doc_languages()
 ALLOWED_VERSION_TYPES = ["release", "bug", "feature"]
 
 
-
 @task
 def version(_c: Context):
     """Show the current version."""
@@ -43,12 +42,11 @@ def ver_task_factory(version_type: str):
     return ver
 
 
-
+@task
 def reqs(c: Context):
     """Upgrade requirements including pre-commit."""
     c.run("pre-commit autoupdate")
     c.run("uv lock --upgrade")
-    
 
 def docs_task_factory(language: str):
     @task
@@ -69,7 +67,6 @@ def docs_task_factory(language: str):
 def uv(c: Context):
     """Install or upgrade uv."""
     c.run("curl -LsSf https://astral.sh/uv/install.sh | sh")
-
 
 @task
 def pre(c):
