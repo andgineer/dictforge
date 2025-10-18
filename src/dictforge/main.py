@@ -10,7 +10,7 @@ from rich.text import Text
 
 from dictforge import __version__
 
-from .builder import Builder, KaikkiParseError
+from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
 from .config import config_path, load_config, save_config
 from .kindle import guess_kindlegen_path
 from .langutil import make_defaults, normalize_input_name
@@ -54,7 +54,7 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
     nargs=1,
 )
 @click.pass_context
-def cli(  # noqa: PLR0913
+def cli(  # noqa: PLR0913,PLR0915,C901
     ctx: click.Context,
     in_lang: str | None,
     out_lang: str | None,
@@ -131,7 +131,7 @@ def cli(  # noqa: PLR0913
 
     in_langs = [in_lang_norm] + merge_list
     try:
-        b.build_dictionary(
+        counts = b.build_dictionary(
             in_langs=in_langs,
             out_lang=out_lang_norm,
             title=title_val,
@@ -142,6 +142,23 @@ def cli(  # noqa: PLR0913
             try_fix_inflections=try_fix_val,
             max_entries=max_entries,
         )
+    except KaikkiDownloadError as exc:
+        console.print(Text(str(exc), style="bold red"))
+        console.print(
+            "Download the raw dump manually or retry later if the service is busy.",
+            style="yellow",
+        )
+        raise SystemExit(1) from exc
+    except KindleBuildError as exc:
+        console.print(Text(str(exc), style="bold red"))
+        console.print(
+            (
+                "Ensure the Kindle Previewer path is correct "
+                "and that the metadata contains a valid language code."
+            ),
+            style="yellow",
+        )
+        raise SystemExit(1) from exc
     except KaikkiParseError as exc:
         console.print(Text(str(exc), style="bold red"))
         if getattr(exc, "excerpt", None):
@@ -170,7 +187,15 @@ def cli(  # noqa: PLR0913
         )
         raise SystemExit(1) from exc
 
-    click.secho(f"DONE: {outdir_path}", fg="green", bold=True)
+    click.secho(
+        f"DONE: {outdir_path} (primary entries: {counts.get(in_lang_norm, 0)})",
+        fg="green",
+        bold=True,
+    )
+    for extra_lang, entry_count in counts.items():
+        if extra_lang == in_lang_norm:
+            continue
+        click.echo(f"  extra {extra_lang}: {entry_count} entries")
 
 
 @cli.command("init")
