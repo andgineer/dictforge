@@ -1,4 +1,5 @@
-# Installing pipx
+# Installation
+## Installing pipx
 [`pipx`](https://pypa.github.io/pipx/) creates isolated environments to avoid conflicts with existing system packages.
 
 === "macOS"
