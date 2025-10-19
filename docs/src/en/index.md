@@ -1,46 +1,17 @@
 # dictforge
 
-Forge Kindle-compatible dictionaries for every language
+Forge Kindle-ready dictionaries for every language
 
+## Quick start
 
-### Quick Start
-
-Install Kindle Previewer 3 first
-
-```
-dictforge sr en
-```
-
-#### Load the dictionary onto your Kindle
-
-Connect your Kindle over USB (it appears as a drive).
-
-Copy the .mobi/.azw3 dictionary file to:
-
-Documents/Dictionaries (preferred), or just Documents if the folder doesn’t exist.
-
-On the Kindle:
-
-Settings → Language & Dictionaries → Dictionaries
-
-Select the input language group (e.g., Serbian / Serbo-Croatian).
-
-Choose your new dictionary as the default for that group.
-
-Open a Serbian/Serbo-Croatian text and tap a word to see the lookup.
-
-set default output language (e.g., English)
-```
-dictforge --init
-```
-
-to see all available options.
+[Install the utility](installation.md)
 
 ```bash
-dictforge --help
+dictforge --kindlegen-path "/Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen" sr en
 ```
 
-
-!!! info "About"
-    ![About](images/about.jpg)
-    [About][dictforge.__about__]
+- First run downloads the Wiki Dictinary (~20GB compressed); subsequent runs reuse it.
+- The command example creates the dictionary for Serbo-Croatian → English in folder `build\`.
+- Copy the generated MOBI-file to `Documents/Dictionaries/` on your Kindle or just to `Documents/` if no `Dictionaries` folder exists.
+- Reading the book long-presses a word shows the dictionary. As Kindle does not support a lot of languages, like Serbian,
+first time you should select the dictionary manually via `Dictionary` -> `Select new dictionary`.
