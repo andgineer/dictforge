@@ -463,12 +463,25 @@ class Builder:
 
         return filtered_path, count
 
-    def _kindle_lang_code(self, code: str | None) -> str:
+    def _kindle_lang_code(self, code: str | None, override: str | None = None) -> str:
+        if override:
+            normalized_override = override.lower()
+            if normalized_override in KINDLE_SUPPORTED_LANGS:
+                return normalized_override
+            raise KindleBuildError(
+                (
+                    f"Kindle language override '{override}' is not supported by Kindle. "
+                    "Check the supported list and pick a valid code."
+                ),
+            )
+
         if not code:
             return "en"
+
         normalized = code.lower()
         if normalized in KINDLE_SUPPORTED_LANGS:
             return normalized
+
         overrides = {
             "sr": "hr",
             "en": "en-us",
@@ -491,13 +504,14 @@ class Builder:
         include_pos: bool,  # noqa: ARG002
         try_fix_inflections: bool,
         max_entries: int,  # noqa: ARG002
+        kindle_lang_override: str | None = None,
     ) -> int:
         language_file, entry_count = self._ensure_filtered_language(in_lang)
         language_file = self._ensure_translated_glosses(language_file, in_lang, out_lang)
         iso_in, _ = lang_meta(in_lang)
         iso_out, _ = lang_meta(out_lang)
         kindle_in = self._kindle_lang_code(iso_in)
-        kindle_out = self._kindle_lang_code(iso_out)
+        kindle_out = self._kindle_lang_code(iso_out, override=kindle_lang_override)
 
         dc = DictionaryCreator(in_lang, out_lang, kaikki_file_path=str(language_file))
         dc.source_language = kindle_in
@@ -649,6 +663,7 @@ class Builder:
         include_pos: bool,
         try_fix_inflections: bool,
         max_entries: int,
+        kindle_lang_override: str | None = None,
     ) -> dict[str, int]:
         primary = in_langs[0]
         counts = {}
@@ -662,6 +677,7 @@ class Builder:
             include_pos,
             try_fix_inflections,
             max_entries,
+            kindle_lang_override,
         )
 
         for extra in in_langs[1:]:
@@ -677,6 +693,7 @@ class Builder:
                 include_pos,
                 try_fix_inflections,
                 max_entries,
+                kindle_lang_override,
             )
 
         self.session.close()

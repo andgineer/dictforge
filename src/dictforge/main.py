@@ -13,7 +13,7 @@ from dictforge import __version__
 from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
 from .config import config_path, load_config, save_config
 from .kindle import guess_kindlegen_path
-from .langutil import make_defaults, normalize_input_name
+from .langutil import lang_meta, make_defaults, normalize_input_name
 
 # rich-click styling
 click.rich_click.TEXT_MARKUP = "rich"
@@ -44,6 +44,11 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
     default=None,
     help="Fix lookup for inflections (mostly Latin scripts)",
 )
+@click.option(
+    "--kindle-lang",
+    default="",
+    help="Override Kindle dictionary language code if your target language is unsupported",
+)
 @click.option("--cache-dir", default=None, help="Cache directory for downloaded JSONL")
 @click.option(
     "--version",
@@ -54,7 +59,7 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
     nargs=1,
 )
 @click.pass_context
-def cli(  # noqa: PLR0913,PLR0915,C901
+def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
     ctx: click.Context,
     in_lang: str | None,
     out_lang: str | None,
@@ -66,6 +71,7 @@ def cli(  # noqa: PLR0913,PLR0915,C901
     max_entries: int,
     include_pos: bool | None,
     try_fix_inflections: bool | None,
+    kindle_lang: str,
     cache_dir: str | None,
     version: bool,
 ) -> None:
@@ -120,6 +126,11 @@ def cli(  # noqa: PLR0913,PLR0915,C901
         else []
     )
 
+    kindle_lang_code: str | None = None
+    if kindle_lang:
+        kindle_lang_name = normalize_input_name(kindle_lang)
+        kindle_lang_code, _ = lang_meta(kindle_lang_name)
+
     dfl = make_defaults(in_lang_norm, out_lang_norm)
     title_val = title or dfl["title"]
     short_val = shortname or dfl["shortname"]
@@ -141,6 +152,7 @@ def cli(  # noqa: PLR0913,PLR0915,C901
             include_pos=include_pos_val,
             try_fix_inflections=try_fix_val,
             max_entries=max_entries,
+            kindle_lang_override=kindle_lang_code,
         )
     except KaikkiDownloadError as exc:
         console.print(Text(str(exc), style="bold red"))
