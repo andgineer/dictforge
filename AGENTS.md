@@ -1,20 +1,26 @@
 # Repository Guidelines
 
+The Dictforge project pairs a CLI with supporting tooling for ebook dictionary workflows. Follow these notes to stay aligned with the existing repo practices.
+
 ## Project Structure & Module Organization
-Application code lives in `src/dictforge/`, with `main.py` exposing the `dictforge` CLI and helpers such as `builder.py`, `langutil.py`, and `kindle.py`. Shared shell utilities sit in `scripts/`, while documentation sources and localisation assets are under `docs/`. Tests reside in `tests/` and mirror CLI behaviours. Dependency metadata is managed through `pyproject.toml` and `uv.lock`, and `. ./activate.sh` bootstraps the development environment.
+- Application code lives in `src/dictforge/`; `main.py` exposes the `dictforge` CLI while `builder.py`, `langutil.py`, and `kindle.py` hold feature modules.
+- Shared shell helpers reside in `scripts/`.
+- Documentation and localisation assets sit under `docs/`.
+- Tests mirror CLI behaviour in `tests/`.
+- Tooling metadata is tracked in `pyproject.toml` and `uv.lock`, and `. ./activate.sh` prepares the uv-managed Python 3.12 env.
 
 ## Build, Test, and Development Commands
-- `. ./activate.sh` — create or activate the uv-managed Python 3.12 virtualenv.
-- `uv run dictforge --help` — verify the CLI wiring after changes.
-- `uv run pytest` — execute unit tests and doctests defined by `pytest.ini`.
-- `invoke pre` — run the configured pre-commit suite across the codebase.
-- `invoke docs-en` (or another language suffix) — preview the MkDocs site; matching tasks sync shared assets between locales.
+- `source activate.sh` — always run this first to enter the uv-managed Python env before any other command.
+- `uv run dictforge --help` — confirm CLI wiring after edits.
+- `uv run pytest` — run the test suite (use this command for all automated tests).
+- `invoke pre` — execute linting and formatting hooks.
+- `invoke docs-en` — build the English MkDocs site; swap suffix for other locales.
 
 ## Coding Style & Naming Conventions
-Follow Ruff defaults with the project line length of 99 characters; run `ruff check .` if you need a focused lint pass. Prefer type hints for new interfaces and keep module, package, and test names in `snake_case`. Install hooks via `pre-commit install` so formatting and linting run before each commit.
+Follow Ruff defaults with a 99-character line limit and standard Black-style indentation. Prefer type hints for new APIs, keep modules, packages, and tests in `snake_case`, and rely on `ruff check .` for focussed linting. Add comments sparingly and align docstrings with public interfaces.
 
 ## Testing Guidelines
-Pytest is the primary framework; test modules belong in `tests/` and start with `test_`. Include CLI regression tests via `CliRunner` where practical and leverage doctests for simple contracts. Use `uv run pytest --cov=src/dictforge --cov-report=term-missing` when you need a coverage view, and capture Allure data with `uv run pytest --alluredir=build/tests` for publishing.
+Pytest drives coverage; name test files `test_*.py` under `tests/`. Exercise CLI commands via `CliRunner` where practical, and call `uv run pytest --cov=src/dictforge --cov-report=term-missing` to verify coverage. Generate Allure artifacts with `uv run pytest --alluredir=build/tests` for publishing.
 
 ## Commit & Pull Request Guidelines
-Write short, imperative commit subjects (`Add CLI option`, `Fix Kindle metadata`) to stay consistent with the current history. Squash noisy WIP commits before review. Pull requests should describe the behaviour change, list any docs or assets touched, and link related issues. Attach CLI output or screenshots when altering user-visible functionality, and confirm the `invoke pre` and `uv run pytest` checks have passed.
+Write imperative, <=50 character commit subjects (e.g., `Add CLI option`), and mention scope in the body when needed. Before opening a PR, ensure `invoke pre` and `uv run pytest` are green, document any CLI-facing changes, attach relevant output or screenshots, and link issues or tickets. Squash WIP commits so reviewers see a concise history.
