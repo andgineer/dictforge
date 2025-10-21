@@ -1,16 +1,41 @@
 from __future__ import annotations
 
+from pathlib import Path
 
 from dictforge import kindle
 
 
-def test_guess_kindlegen_path_returns_match(monkeypatch, tmp_path) -> None:
+def _mock_exists(target: str):
+    normalized_target = target.replace("\\", "/")
+
+    def _inner(self: Path) -> bool:
+        actual = getattr(self, "as_posix", lambda: str(self))()
+        return actual.replace("\\", "/") == normalized_target
+
+    return _inner
+
+
+def test_guess_kindlegen_path_returns_match(monkeypatch) -> None:
     monkeypatch.setattr("platform.system", lambda: "Darwin")
     candidate = "/Applications/Kindle Previewer 3.app/Contents/MacOS/lib/fc/bin/kindlegen"
 
-    monkeypatch.setattr("dictforge.kindle.Path.exists", lambda self: str(self) == candidate)
+    monkeypatch.setattr("dictforge.kindle.Path.exists", _mock_exists(candidate))
 
     assert kindle.guess_kindlegen_path() == candidate
+
+
+def test_guess_kindlegen_path_windows(monkeypatch) -> None:
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    home = r"C:\\Users\\TestUser"
+    monkeypatch.setenv("USERPROFILE", home)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+
+    candidate = str(Path(home) / "AppData/Local/Amazon/Kindle Previewer 3/lib/fc/bin/kindlegen.exe")
+    monkeypatch.setattr("dictforge.kindle.Path.exists", _mock_exists(candidate))
+
+    result = kindle.guess_kindlegen_path()
+    assert result.endswith("kindlegen.exe")
+    assert "Kindle Previewer 3" in result
 
 
 def test_guess_kindlegen_path_empty_when_missing(monkeypatch) -> None:
