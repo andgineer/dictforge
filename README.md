@@ -7,10 +7,10 @@
 | src/dictforge/\_\_about\_\_.py |        1 |        0 |    100% |           |
 | src/dictforge/builder.py       |      327 |       49 |     85% |212, 216-217, 225, 270-271, 286, 297-299, 307-308, 317-318, 339, 346, 349-350, 367, 380-381, 387-406, 422-423, 438, 449, 492, 524-525, 540, 547, 584, 597, 604, 640 |
 | src/dictforge/config.py        |       38 |        3 |     92% |  9-10, 50 |
-| src/dictforge/kindle.py        |       16 |        2 |     88% |     15-16 |
+| src/dictforge/kindle.py        |       16 |        0 |    100% |           |
 | src/dictforge/langutil.py      |       21 |        1 |     95% |        39 |
 | src/dictforge/main.py          |      109 |       22 |     80% |88, 131-132, 164-200 |
-|                      **TOTAL** |  **512** |   **77** | **85%** |           |
+|                      **TOTAL** |  **512** |   **75** | **85%** |           |
 
 
 ## Setup coverage badge
