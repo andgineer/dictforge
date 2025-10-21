@@ -23,7 +23,7 @@ Kindle links a dictionary automatically based on the language stored in the eboo
 Unfortunately the reader supports only a narrow list of languages for dictionaries – see Amazon’s
 [supported Kindle language list](https://wiki.mobileread.com/wiki/Amazon_Kindle#Supported_languages).
 
-Pick any (otherwise unused) supported language both in the new `--kindle-lang` option and, preferably, in the book metadata;
+Pick any (otherwise unused) supported language both in the `--kindle-lang` option and, preferably, in the book metadata;
 the dictionary will then attach automatically.
 
 If you use [Calibre](https://calibre-ebook.com/), set that language before converting the book to MOBI.
