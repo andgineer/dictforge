@@ -17,7 +17,7 @@ from dictforge.builder import (
 
 @pytest.fixture
 def builder(tmp_path: Path) -> Builder:
-    return Builder(tmp_path)
+    return Builder(tmp_path, show_progress=False)
 
 
 def test_slugify_and_kaikki_slug(builder: Builder) -> None:

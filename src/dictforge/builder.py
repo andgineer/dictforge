@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import re
 import shutil
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from html.parser import HTMLParser
 from json import JSONDecodeError
 from pathlib import Path
@@ -14,6 +18,18 @@ from urllib.parse import quote
 
 import requests
 from ebook_dictionary_creator import DictionaryCreator
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    Task,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
 from .langutil import lang_meta
 
@@ -233,16 +249,290 @@ class KaikkiParseError(RuntimeError):
         ]
 
 
+def _format_units(task: Task, unit: str) -> str:
+    completed = int(task.completed or 0)
+    total = task.total
+    label = unit if unit != "B" else "B"
+    if total is None:
+        return f"{completed:,} {label}"
+    return f"{completed:,}/{int(total):,} {label}"
+
+
+class _BaseProgressCapture:
+    def __init__(
+        self,
+        *,
+        console: Console,
+        enabled: bool,
+        description: str,
+        unit: str,
+        total_hint: int | None = None,
+    ) -> None:
+        self._console = console
+        self._enabled = enabled
+        self._description = description
+        self._unit = unit
+        self._total_hint = total_hint
+        self._progress: Progress | None = None
+        self._task_id: int | None = None
+        self._captured = io.StringIO()
+        self._buffer = ""
+        self._current = 0
+        self._warnings: list[str] = []
+
+    def _format_description(self, text: str) -> str:
+        unit_hint = f" [{self._unit}]" if self._unit else ""
+        return f"{text}{unit_hint}"
+
+    def start(self) -> None:
+        if not self._enabled:
+            return
+        columns = [
+            TextColumn("[progress.description]{task.description}"),
+            SpinnerColumn(),
+            BarColumn(bar_width=None),
+            TextColumn("{task.completed:,}", justify="right"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ]
+        self._progress = Progress(
+            *columns,
+            console=self._console,
+            transient=False,
+            refresh_per_second=5,
+            expand=True,
+        )
+        self._progress.__enter__()
+        self._task_id = self._progress.add_task(
+            self._format_description(self._description),
+            total=self._total_hint,
+        )
+
+    def stop(self) -> None:
+        if self._buffer.strip():
+            self.handle_line(self._buffer.strip())
+        self._buffer = ""
+        if self._progress is not None and self._task_id is not None:
+            self._progress.__exit__(None, None, None)
+            self._progress = None
+
+    def write(self, text: str) -> int:
+        self._captured.write(text)
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self.handle_line(line.strip())
+        return len(text)
+
+    def flush(self) -> None:  # pragma: no cover - interface requirement
+        return None
+
+    def handle_line(self, line: str) -> None:  # pragma: no cover - overridden
+        if line:
+            self._warnings.append(line)
+
+    def set_total(self, total: int) -> None:
+        if total < 0:
+            return
+        self._total_hint = total
+        if self._progress is not None and self._task_id is not None:
+            self._progress.update(self._task_id, total=total)  # type: ignore
+
+    def advance_to(self, value: int) -> None:
+        if value <= self._current:
+            return
+        self._current = value
+        if self._progress is not None and self._task_id is not None:
+            self._progress.update(self._task_id, completed=value)  # type: ignore
+
+    def set_description(self, description: str) -> None:
+        self._description = description
+        if self._progress is not None and self._task_id is not None:
+            self._progress.update(
+                self._task_id,  # type: ignore
+                description=self._format_description(description),
+            )
+
+    def finish(self) -> None:
+        if self._progress is not None and self._task_id is not None:
+            completed = self._total_hint if self._total_hint is not None else self._current
+            self._progress.update(self._task_id, completed=completed)  # type: ignore
+
+    @property
+    def warnings(self) -> list[str]:
+        return self._warnings
+
+    def output(self) -> str:
+        if self._buffer.strip():
+            self.handle_line(self._buffer.strip())
+            self._buffer = ""
+        return self._captured.getvalue()
+
+
+class _DatabaseProgressCapture(_BaseProgressCapture):
+    def __init__(self, *, console: Console, enabled: bool) -> None:
+        super().__init__(
+            console=console,
+            enabled=enabled,
+            description="Building database",
+            unit="inflections",
+        )
+
+    def handle_line(self, line: str) -> None:
+        if not line:
+            return
+        if line.endswith("inflections to add manually"):
+            try:
+                total = int(line.split(" ", 1)[0])
+            except ValueError:
+                return
+            self.set_description("Adding inflections")
+            self.set_total(total)
+        elif line.isdigit():
+            self.advance_to(int(line))
+        elif line.endswith("relations with 3 elements"):
+            self.set_description("Linking inflections")
+        else:
+            self.warnings.append(line)
+
+
+class _KindleProgressCapture(_BaseProgressCapture):
+    def __init__(
+        self,
+        *,
+        console: Console,
+        enabled: bool,
+        total_hint: int | None,
+    ) -> None:
+        super().__init__(
+            console=console,
+            enabled=enabled,
+            description="Creating Kindle dictionary",
+            unit="words",
+            total_hint=total_hint,
+        )
+        self.base_forms: int | None = None
+        self.inflections: int | None = None
+
+    def handle_line(self, line: str) -> None:  # noqa: C901,PLR0912
+        if not line:
+            return
+        if line == "Getting base forms":
+            self.set_description("Loading base forms")
+        elif line.startswith("Iterating through base forms"):
+            self.set_description("Processing base forms")
+        elif line.endswith(" words"):
+            try:
+                words = int(line.split(" ", 1)[0])
+            except ValueError:
+                return
+            if self._total_hint is None and self.base_forms is not None:
+                self.set_total(self.base_forms)
+            elif self._total_hint is None:
+                self.set_total(words)
+            self.advance_to(words)
+        elif line == "Creating dictionary":
+            self.set_description("Compiling dictionary")
+        elif line == "Writing dictionary":
+            self.set_description("Writing MOBI file")
+        elif line.endswith(" base forms"):
+            try:
+                self.base_forms = int(line.split(" ", 1)[0])
+            except ValueError:
+                return
+            self.set_total(self.base_forms)
+            self.advance_to(self.base_forms)
+        elif line.endswith(" inflections"):
+            try:
+                self.inflections = int(line.split(" ", 1)[0])
+            except ValueError:
+                self.inflections = None
+        else:
+            self.warnings.append(line)
+
+
 class Builder:
     """
     Thin wrapper around ebook_dictionary_creator.
     Downloads Kaikki data, builds DB, exports Kindle dictionary.
     """
 
-    def __init__(self, cache_dir: Path):
+    def __init__(self, cache_dir: Path, show_progress: bool | None = None):
         self.cache_dir = cache_dir
         self.session = requests.Session()
         self._translation_cache: dict[tuple[str, str], dict[str, list[str]]] = {}
+        self._show_progress = sys.stderr.isatty() if show_progress is None else show_progress
+        self._console = Console(stderr=True, force_terminal=self._show_progress)
+
+    @contextmanager
+    def _progress_bar(
+        self,
+        *,
+        description: str,
+        total: int | None = None,
+        unit: str = "entries",
+    ) -> Iterator[Callable[[int], None]]:
+        if not self._show_progress:
+
+            def noop(_: int) -> None:
+                return None
+
+            yield noop
+            return
+
+        columns: list[Any] = [TextColumn("[progress.description]{task.description}")]
+        if total is None:
+            columns.append(SpinnerColumn())
+        else:
+            columns.append(BarColumn(bar_width=None))
+        if unit == "B":
+            columns.extend([DownloadColumn(), TransferSpeedColumn()])
+        columns.append(TimeElapsedColumn())
+        if total is not None:
+            columns.append(TimeRemainingColumn())
+        else:
+            label = "bytes" if unit == "B" else unit
+            columns.append(TextColumn(f"{{task.completed:,}} {label}"))
+
+        progress = Progress(
+            *columns,
+            console=self._console,
+            transient=False,
+            refresh_per_second=4,
+            expand=True,
+        )
+        with progress:
+            task_id = progress.add_task(description, total=total)
+
+            def advance(amount: int) -> None:
+                progress.update(task_id, advance=amount)
+
+            yield advance
+
+    def _emit_creator_output(self, label: str, capture: _BaseProgressCapture) -> None:
+        output = capture.output().strip()
+        if not output:
+            return
+        self._console.print(f"[dictforge] {label}", style="yellow")
+        self._console.print(output, style="dim")
+
+    def _announce_summary(
+        self,
+        in_lang: str,
+        out_lang: str,
+        entry_count: int,
+        capture: _KindleProgressCapture,
+    ) -> None:
+        parts = [f"{entry_count:,} entries"]
+        if capture.base_forms is not None:
+            parts.append(f"{capture.base_forms:,} base forms")
+        if capture.inflections is not None:
+            parts.append(f"{capture.inflections:,} inflections")
+        summary = ", ".join(parts)
+        self._console.print(
+            f"[dictforge] {in_lang} → {out_lang}: {summary}",
+            style="green",
+        )
 
     def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
         # Placeholder for future caching/version pinning; ensure dir exists.
@@ -272,10 +562,26 @@ class Builder:
                 f"Failed to download Kaikki dump for {language} from {url}: {exc}",
             ) from exc
 
-        with target.open("wb") as fh:
+        headers = getattr(response, "headers", {}) or {}
+        content_length = headers.get("Content-Length")
+        try:
+            total = int(content_length) if content_length else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            total = None
+
+        with (
+            self._progress_bar(
+                description=f"Downloading {language}",
+                total=total,
+                unit="B",
+            ) as advance,
+            target.open("wb") as fh,
+        ):
             for chunk in response.iter_content(chunk_size=1 << 20):
-                if chunk:
-                    fh.write(chunk)
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                advance(len(chunk))
 
         return target
 
@@ -398,10 +704,26 @@ class Builder:
                 f"Failed to download Kaikki raw dump from {RAW_DUMP_URL}: {exc}",
             ) from exc
 
-        with target.open("wb") as fh:
+        headers = getattr(response, "headers", {}) or {}
+        content_length = headers.get("Content-Length")
+        try:
+            total = int(content_length) if content_length else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            total = None
+
+        with (
+            self._progress_bar(
+                description="Downloading Kaikki raw dump",
+                total=total,
+                unit="B",
+            ) as advance,
+            target.open("wb") as fh,
+        ):
             for chunk in response.iter_content(chunk_size=1 << 20):
-                if chunk:
-                    fh.write(chunk)
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                advance(len(chunk))
 
         return target
 
@@ -427,6 +749,9 @@ class Builder:
         count = 0
         try:
             with (
+                self._progress_bar(
+                    description=f"Filtering {language}",
+                ) as advance,
                 gzip.open(raw_dump, "rt", encoding="utf-8") as src,
                 filtered_path.open(
                     "w",
@@ -440,6 +765,8 @@ class Builder:
                         entry = json.loads(line)
                     except json.JSONDecodeError as exc:
                         raise KaikkiParseError(None, exc) from exc
+
+                    advance(1)
 
                     entry_language = entry.get("language") or entry.get("lang")
                     if entry_language == language:
@@ -493,7 +820,7 @@ class Builder:
 
         return normalized if normalized in KINDLE_SUPPORTED_LANGS else "en"
 
-    def _export_one(  # noqa: PLR0913
+    def _export_one(  # noqa: PLR0913,PLR0915
         self,
         in_lang: str,
         out_lang: str,
@@ -516,44 +843,77 @@ class Builder:
         dc = DictionaryCreator(in_lang, out_lang, kaikki_file_path=str(language_file))
         dc.source_language = kindle_in
         dc.target_language = kindle_out
+        database_path = self.cache_dir / f"{self._slugify(in_lang)}_{self._slugify(out_lang)}.db"
+        db_capture = _DatabaseProgressCapture(console=self._console, enabled=self._show_progress)
+        db_capture.start()
         try:
-            database_path = (
-                self.cache_dir / f"{self._slugify(in_lang)}_{self._slugify(out_lang)}.db"
-            )
-            dc.create_database(database_path=str(database_path))
-        except JSONDecodeError as exc:
-            raise KaikkiParseError(getattr(dc, "kaikki_file_path", None), exc) from exc
+            with redirect_stdout(db_capture), redirect_stderr(db_capture):  # type: ignore
+                try:
+                    dc.create_database(database_path=str(database_path))
+                except JSONDecodeError as exc:
+                    raise KaikkiParseError(getattr(dc, "kaikki_file_path", None), exc) from exc
+        except Exception:
+            self._emit_creator_output("Database build output", db_capture)
+            raise
+        else:
+            db_capture.finish()
+        finally:
+            db_capture.stop()
         mobi_base = outdir / f"{in_lang}-{out_lang}"
         shutil.rmtree(mobi_base, ignore_errors=True)
+        kindle_capture = _KindleProgressCapture(
+            console=self._console,
+            enabled=self._show_progress,
+            total_hint=entry_count if entry_count else None,
+        )
+        kindle_capture.start()
+        fallback_exc: FileNotFoundError | None = None
         try:
-            dc.export_to_kindle(
-                kindlegen_path=kindlegen_path,
-                try_to_fix_failed_inflections=try_fix_inflections,  # type: ignore[arg-type]  # bug in the lib
-                author="Wiktionary via Wiktextract (Kaikki.org)",
-                title=title,
-                mobi_temp_folder_path=str(mobi_base),
-                mobi_output_file_path=f"{mobi_base}.mobi",
-            )
+            with redirect_stdout(kindle_capture), redirect_stderr(kindle_capture):  # type: ignore
+                dc.export_to_kindle(
+                    kindlegen_path=kindlegen_path,
+                    try_to_fix_failed_inflections=try_fix_inflections,  # type: ignore[arg-type]  # bug in the lib
+                    author="Wiktionary via Wiktextract (Kaikki.org)",
+                    title=title,
+                    mobi_temp_folder_path=str(mobi_base),
+                    mobi_output_file_path=f"{mobi_base}.mobi",
+                )
         except FileNotFoundError as exc:
-            opf_path = mobi_base / "OEBPS" / "content.opf"
-            if not opf_path.exists():
-                raise KindleBuildError(
-                    "Kindle Previewer failed and content.opf is missing; see previous output.",
-                ) from exc
-            self._ensure_opf_languages(opf_path, kindle_in, kindle_out, title)
-            self._run_kindlegen(kindlegen_path, opf_path)
-            mobi_path = mobi_base / "OEBPS" / "content.mobi"
-            if not mobi_path.exists():
-                raise KindleBuildError(
-                    "Kindle Previewer did not produce content.mobi even after fixing metadata.",
-                ) from exc
-            final_path = Path(f"{mobi_base}.mobi")
-            shutil.move(mobi_path, final_path)
-            dc.mobi_path = str(final_path)
-            shutil.rmtree(mobi_base, ignore_errors=True)
+            fallback_exc = exc
+        except Exception:
+            self._emit_creator_output("Kindle export output", kindle_capture)
+            raise
         else:
+            kindle_capture.finish()
+        finally:
+            kindle_capture.stop()
+
+        if fallback_exc is None:
+            self._announce_summary(in_lang, out_lang, entry_count, kindle_capture)
             return entry_count
 
+        opf_path = mobi_base / "OEBPS" / "content.opf"
+        if not opf_path.exists():
+            raise KindleBuildError(
+                "Kindle Previewer failed and content.opf is missing; see previous output.",
+            ) from fallback_exc
+        self._console.print(
+            "[dictforge] Kindle Previewer fallback: fixing metadata and retrying",
+            style="yellow",
+        )
+        self._ensure_opf_languages(opf_path, kindle_in, kindle_out, title)
+        self._run_kindlegen(kindlegen_path, opf_path)
+        mobi_path = mobi_base / "OEBPS" / "content.mobi"
+        if not mobi_path.exists():
+            raise KindleBuildError(
+                "Kindle Previewer did not produce content.mobi even after fixing metadata.",
+            ) from fallback_exc
+        final_path = Path(f"{mobi_base}.mobi")
+        shutil.move(mobi_path, final_path)
+        dc.mobi_path = str(final_path)
+        shutil.rmtree(mobi_base, ignore_errors=True)
+
+        self._announce_summary(in_lang, out_lang, entry_count, kindle_capture)
         return entry_count
 
     def _ensure_opf_languages(  # noqa: PLR0912,C901
