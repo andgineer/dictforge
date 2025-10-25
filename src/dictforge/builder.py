@@ -620,7 +620,7 @@ class Builder:
     def _create_tatoeba_entry(  # noqa: PLR0913
         self,
         *,
-        headword: str,
+        headword: str,  # noqa: ARG002
         display_word: str,
         matches: list[tuple[str, str]],
         gloss: str | None,
@@ -644,7 +644,6 @@ class Builder:
             "language": language_name,
             "senses": [sense] if sense else [],
             "source": "tatoeba",
-            "key": headword,
         }
 
     def _prepare_dataset(  # noqa: C901,PLR0912,PLR0913,PLR0915
@@ -662,7 +661,8 @@ class Builder:
         filename = f"{self._slugify('_'.join(source_langs))}__to__{self._slugify(out_lang)}.jsonl"
         combined_path = combined_dir / filename
 
-        combined_entries: dict[str, dict[str, Any]] = {}
+        combined_entries: list[dict[str, Any]] = []
+        indices_by_key: dict[str, list[int]] = {}
         headword_sources: dict[str, set[str]] = {}
         enriched_from_tatoeba: set[str] = set()
         kaikki_headwords: set[str] = set()
@@ -718,44 +718,48 @@ class Builder:
                                     normalize_serbian=True,
                                 )
 
-                    base = combined_entries.get(key)
-                    if base is None:
-                        combined_entries[key] = entry
-                        base = entry
-                    else:
-                        self._merge_entries(base, entry)
-
-                    sources = headword_sources.setdefault(key, set())
-                    sources.add("kaikki")
+                    entry_index = len(combined_entries)
+                    combined_entries.append(entry)
+                    indices_by_key.setdefault(key, []).append(entry_index)
+                    headword_sources.setdefault(key, set()).add("kaikki")
                     kaikki_headwords.add(key)
 
                     if tatoeba is not None:
                         examples = tatoeba.get_examples_for(display_word)
                         gloss = tatoeba.get_gloss_for(display_word)
-                        if examples or gloss:
-                            changed = self._apply_tatoeba_enrichment(
-                                base,
+                        if examples or gloss:  # noqa: SIM102
+                            if self._apply_tatoeba_enrichment(
+                                entry,
                                 examples,
                                 gloss,
                                 normalize_serbian=normalize_serbian,
-                            )
-                            if changed:
-                                sources.add("tatoeba")
+                            ):
+                                headword_sources[key].add("tatoeba")
                                 enriched_from_tatoeba.add(key)
 
         if tatoeba is not None:
             for key in sorted(tatoeba_vocab):
-                sources = headword_sources.setdefault(key, set())
-                sources.add("tatoeba")
-                if key in combined_entries:
-                    continue
+                headword_sources.setdefault(key, set()).add("tatoeba")
+                existing_indices = indices_by_key.get(key, [])
                 examples = tatoeba.get_examples_for(key)
                 gloss = tatoeba.get_gloss_for(key)
+                if existing_indices:
+                    changed = False
+                    for idx in existing_indices:
+                        if self._apply_tatoeba_enrichment(
+                            combined_entries[idx],
+                            examples,
+                            gloss,
+                            normalize_serbian=normalize_serbian,
+                        ):
+                            changed = True
+                    if changed:
+                        enriched_from_tatoeba.add(key)
+                    continue
                 if not examples and not gloss:
                     continue
-                display_word = examples[0][0] if examples else key
                 display_word = self._normalize_display(
-                    display_word,
+                    examples[0][0] if examples else key,
                     normalize_serbian=normalize_serbian,
                 )
                 entry = self._create_tatoeba_entry(
@@ -766,16 +770,16 @@ class Builder:
                     language_name=primary_language,
                     normalize_serbian=normalize_serbian,
                 )
-                entry.pop("key", None)
-                combined_entries[key] = entry
+                entry_index = len(combined_entries)
+                combined_entries.append(entry)
+                indices_by_key.setdefault(key, []).append(entry_index)
+                enriched_from_tatoeba.add(key)
 
-        ordered_keys = sorted(combined_entries.keys())
-        if max_entries > 0:
-            ordered_keys = ordered_keys[:max_entries]
+        if max_entries > 0 and len(combined_entries) > max_entries:
+            combined_entries = combined_entries[:max_entries]
 
         with combined_path.open("w", encoding="utf-8") as fh:
-            for key in ordered_keys:
-                entry = combined_entries[key]
+            for entry in combined_entries:
                 fh.write(json.dumps(entry, ensure_ascii=False))
                 fh.write("\n")
 
@@ -784,9 +788,9 @@ class Builder:
             "kaikki_unique": len(kaikki_headwords),
             "tatoeba_total": len(tatoeba_vocab),
             "tatoeba_unique": len(tatoeba_vocab),
-            "overlap": len(kaikki_headwords & tatoeba_vocab),
+            "overlap": len({k for k in tatoeba_vocab if k in indices_by_key}),
             "enriched_from_tatoeba": len(enriched_from_tatoeba),
-            "final_headword_count": len(ordered_keys),
+            "final_headword_count": len(combined_entries),
         }
 
         return combined_path, stats
