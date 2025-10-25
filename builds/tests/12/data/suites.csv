@@ -1,0 +1,5 @@
+"DESCRIPTION","DURATION IN MS","NAME","PARENT SUITE","START TIME","STATUS","STOP TIME","SUB SUITE","SUITE","TEST CLASS","TEST METHOD"
+"","0","test_version","tests","Mon Oct 20 10:27:58 GMT 2025","passed","Mon Oct 20 10:27:58 GMT 2025","","test_dictforge","",""
+"","0","test_kindle_lang_override_accepts_supported","tests","Mon Oct 20 10:27:58 GMT 2025","passed","Mon Oct 20 10:27:58 GMT 2025","","test_dictforge","",""
+"","1","test_kindle_lang_override_rejects_unsupported","tests","Mon Oct 20 10:27:58 GMT 2025","passed","Mon Oct 20 10:27:58 GMT 2025","","test_dictforge","",""
+"","2","test_version_option","tests","Mon Oct 20 10:27:58 GMT 2025","passed","Mon Oct 20 10:27:58 GMT 2025","","test_dictforge","",""
