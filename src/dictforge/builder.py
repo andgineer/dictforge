@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 import io
 import json
 import re
@@ -8,15 +7,12 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from html.parser import HTMLParser
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any
-from urllib.parse import quote
+from typing import Any, TextIO, cast
 
-import requests
 from ebook_dictionary_creator import DictionaryCreator
 from rich.console import Console
 from rich.progress import (
@@ -24,24 +20,17 @@ from rich.progress import (
     DownloadColumn,
     Progress,
     SpinnerColumn,
-    Task,
+    TaskID,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
 
+from .kaikki import KaikkiClient, KaikkiDownloadError, KaikkiParseError
 from .langutil import lang_meta
-
-RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"
-RAW_CACHE_DIR = "raw"
-FILTERED_CACHE_DIR = "filtered"
-META_SUFFIX = ".meta.json"
-RESPONSE_EXCERPT_MAX_LENGTH = 200
-ELLIPSE = "..."
-LANGUAGE_CACHE_DIR = "languages"
-TRANSLATION_CACHE_DIR = "translations"
-LANGUAGE_DUMP_URL = "https://kaikki.org/dictionary/{lang}/kaikki.org-dictionary-{slug}.jsonl"
+from .tatoeba import TatoebaError, TatoebaExamples
+from .translit import cyr_to_lat
 
 KINDLE_SUPPORTED_LANGS = {
     "af",
@@ -189,76 +178,19 @@ KINDLE_SUPPORTED_LANGS = {
     "zu",
 }
 
-
-class KaikkiDownloadError(RuntimeError):
-    """Raised when Kaikki resources cannot be downloaded."""
+_TATOEBA_CODE_MAP = {
+    "en": "eng",
+    "ru": "rus",
+    "sr": "srp",
+    "hr": "hrv",
+}
 
 
 class KindleBuildError(RuntimeError):
     """Raised when kindlegen fails while creating the MOBI file."""
 
 
-class KaikkiParseError(RuntimeError):
-    """Raised when the Kaikki JSON dump cannot be parsed."""
-
-    def __init__(self, path: str | Path | None, exc: JSONDecodeError):
-        self.path = Path(path) if path else None
-        location = f"line {exc.lineno}, column {exc.colno}" if exc.lineno else f"position {exc.pos}"
-        path_hint = str(self.path) if self.path else "<unknown Kaikki file>"
-        message = f"Failed to parse Kaikki JSON at {path_hint} ({location}): {exc.msg}."
-        super().__init__(message)
-        self.lineno = exc.lineno
-        self.colno = exc.colno
-        self.original_error = exc
-        doc_snippet = getattr(exc, "doc", "").strip()
-        self.excerpt = self._load_excerpt() if self.path else ([doc_snippet] if doc_snippet else [])
-
-    class _HTMLStripper(HTMLParser):
-        def __init__(self) -> None:
-            super().__init__()
-            self.chunks: list[str] = []
-
-        def handle_data(self, data: str) -> None:  # noqa: D401
-            text = data.strip()
-            if text:
-                self.chunks.append(text)
-
-    def _load_excerpt(self, limit: int = 3) -> list[str]:
-        if not self.path or not self.path.exists():
-            return []
-        try:
-            with self.path.open("r", encoding="utf-8", errors="ignore") as fh:
-                content = fh.read(4096)
-        except OSError:
-            return []
-
-        raw_lines = [line.strip() for line in content.splitlines() if line.strip()]
-        if raw_lines and raw_lines[0].startswith("<"):
-            stripper = self._HTMLStripper()
-            stripper.feed(content)
-            text_lines = stripper.chunks
-        else:
-            text_lines = raw_lines
-
-        excerpt = text_lines[:limit]
-        return [
-            line
-            if len(line) <= RESPONSE_EXCERPT_MAX_LENGTH
-            else f"{line[: RESPONSE_EXCERPT_MAX_LENGTH - len(ELLIPSE)]}{ELLIPSE}"
-            for line in excerpt
-        ]
-
-
-def _format_units(task: Task, unit: str) -> str:
-    completed = int(task.completed or 0)
-    total = task.total
-    label = unit if unit != "B" else "B"
-    if total is None:
-        return f"{completed:,} {label}"
-    return f"{completed:,}/{int(total):,} {label}"
-
-
-class _BaseProgressCapture:
+class _BaseProgressCapture(io.TextIOBase):
     def __init__(
         self,
         *,
@@ -274,7 +206,7 @@ class _BaseProgressCapture:
         self._unit = unit
         self._total_hint = total_hint
         self._progress: Progress | None = None
-        self._task_id: int | None = None
+        self._task_id: TaskID | None = None
         self._captured = io.StringIO()
         self._buffer = ""
         self._current = 0
@@ -316,6 +248,15 @@ class _BaseProgressCapture:
             self._progress.__exit__(None, None, None)
             self._progress = None
 
+    def readable(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
     def write(self, text: str) -> int:
         self._captured.write(text)
         self._buffer += text
@@ -325,38 +266,37 @@ class _BaseProgressCapture:
         return len(text)
 
     def flush(self) -> None:  # pragma: no cover - interface requirement
-        return None
+        if self._buffer.strip():
+            self.handle_line(self._buffer.strip())
+            self._buffer = ""
 
-    def handle_line(self, line: str) -> None:  # pragma: no cover - overridden
-        if line:
-            self._warnings.append(line)
+    def handle_line(self, line: str) -> None:  # pragma: no cover - override in subclasses
+        self._warnings.append(line)
+
+    def set_description(self, text: str) -> None:
+        if self._progress is not None and self._task_id is not None:
+            task_id = self._task_id
+            self._progress.update(
+                task_id,
+                description=self._format_description(text),
+            )
 
     def set_total(self, total: int) -> None:
-        if total < 0:
-            return
-        self._total_hint = total
         if self._progress is not None and self._task_id is not None:
-            self._progress.update(self._task_id, total=total)  # type: ignore
+            task_id = self._task_id
+            self._progress.update(task_id, total=total)
 
     def advance_to(self, value: int) -> None:
-        if value <= self._current:
-            return
-        self._current = value
+        self._current = max(self._current, value)
         if self._progress is not None and self._task_id is not None:
-            self._progress.update(self._task_id, completed=value)  # type: ignore
-
-    def set_description(self, description: str) -> None:
-        self._description = description
-        if self._progress is not None and self._task_id is not None:
-            self._progress.update(
-                self._task_id,  # type: ignore
-                description=self._format_description(description),
-            )
+            task_id = self._task_id
+            self._progress.update(task_id, completed=self._current)
 
     def finish(self) -> None:
         if self._progress is not None and self._task_id is not None:
             completed = self._total_hint if self._total_hint is not None else self._current
-            self._progress.update(self._task_id, completed=completed)  # type: ignore
+            task_id = self._task_id
+            self._progress.update(task_id, completed=completed)
 
     @property
     def warnings(self) -> list[str]:
@@ -452,18 +392,20 @@ class _KindleProgressCapture(_BaseProgressCapture):
 
 
 class Builder:
-    """
-    Thin wrapper around ebook_dictionary_creator.
-    Downloads Kaikki data, builds DB, exports Kindle dictionary.
-    """
-
-    def __init__(self, cache_dir: Path, show_progress: bool | None = None):
+    def __init__(
+        self,
+        cache_dir: Path,
+        show_progress: bool | None = None,
+        *,
+        reset_cache: bool = False,
+    ) -> None:
         self.cache_dir = cache_dir
-        self.session = requests.Session()
-        self._translation_cache: dict[tuple[str, str], dict[str, list[str]]] = {}
         self._show_progress = sys.stderr.isatty() if show_progress is None else show_progress
         self._console = Console(stderr=True, force_terminal=self._show_progress)
+        self._reset_cache = reset_cache
+        self.kaikki = KaikkiClient(cache_dir, reset_cache=reset_cache)
 
+    # ------------------------------------------------------------------
     @contextmanager
     def _progress_bar(
         self,
@@ -535,260 +477,11 @@ class Builder:
         )
 
     def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
-        # Placeholder for future caching/version pinning; ensure dir exists.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # ------------------------------------------------------------------
     def _slugify(self, value: str) -> str:
         return re.sub(r"[^A-Za-z0-9]+", "_", value.strip()) or "language"
-
-    def _kaikki_slug(self, language: str) -> str:
-        return language.replace(" ", "").replace("-", "").replace("'", "")
-
-    def _ensure_language_dataset(self, language: str) -> Path:
-        lang_dir = self.cache_dir / LANGUAGE_CACHE_DIR
-        lang_dir.mkdir(parents=True, exist_ok=True)
-        slug = self._kaikki_slug(language)
-        filename = f"kaikki.org-dictionary-{slug}.jsonl"
-        target = lang_dir / filename
-        if target.exists():
-            return target
-
-        url = LANGUAGE_DUMP_URL.format(lang=quote(language, safe="-"), slug=slug)
-        try:
-            response = self.session.get(url, stream=True, timeout=180)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise KaikkiDownloadError(
-                f"Failed to download Kaikki dump for {language} from {url}: {exc}",
-            ) from exc
-
-        headers = getattr(response, "headers", {}) or {}
-        content_length = headers.get("Content-Length")
-        try:
-            total = int(content_length) if content_length else None
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            total = None
-
-        with (
-            self._progress_bar(
-                description=f"Downloading {language}",
-                total=total,
-                unit="B",
-            ) as advance,
-            target.open("wb") as fh,
-        ):
-            for chunk in response.iter_content(chunk_size=1 << 20):
-                if not chunk:
-                    continue
-                fh.write(chunk)
-                advance(len(chunk))
-
-        return target
-
-    def _load_translation_map(self, source_lang: str, target_lang: str) -> dict[str, list[str]]:
-        key = (source_lang.lower(), target_lang.lower())
-        cached = self._translation_cache.get(key)
-        if cached is not None:
-            return cached
-
-        cache_dir = self.cache_dir / TRANSLATION_CACHE_DIR
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        source_slug = self._kaikki_slug(source_lang)
-        target_slug = self._kaikki_slug(target_lang)
-        cache_path = cache_dir / f"{source_slug}_to_{target_slug}.json"
-
-        source_dump = self._ensure_language_dataset(source_lang)
-        if cache_path.exists() and cache_path.stat().st_mtime >= source_dump.stat().st_mtime:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            self._translation_cache[key] = {k: list(v) for k, v in data.items()}
-            return self._translation_cache[key]
-
-        mapping: dict[str, list[str]] = {}
-        try:
-            with source_dump.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    translations = {
-                        tr["word"]
-                        for sense in entry.get("senses", [])
-                        for tr in sense.get("translations") or []
-                        if tr.get("lang") == target_lang and tr.get("word")
-                    }
-                    if translations:
-                        mapping[entry["word"].lower()] = sorted(translations)
-        except OSError as exc:
-            raise KaikkiDownloadError(
-                f"Failed to read Kaikki dump for {source_lang}: {exc}",
-            ) from exc
-
-        cache_path.write_text(
-            json.dumps(mapping, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
-        self._translation_cache[key] = mapping
-        return mapping
-
-    def _apply_translation_glosses(  # noqa: C901
-        self,
-        entry: dict[str, Any],
-        translation_map: dict[str, list[str]],
-    ) -> None:
-        senses = entry.get("senses") or []
-        for sense in senses:
-            translations: set[str] = set()
-            for link in sense.get("links") or []:
-                if not isinstance(link, (list, tuple)) or not link:
-                    continue
-                pivot = link[0]
-                if isinstance(pivot, str):
-                    translations.update(translation_map.get(pivot.lower(), []))
-            if not translations:
-                for gloss in sense.get("glosses") or []:
-                    if not isinstance(gloss, str):
-                        continue
-                    candidate = gloss.lower()
-                    if candidate in translation_map:
-                        translations.update(translation_map[candidate])
-                        continue
-                    stripped = candidate.split(";", 1)[0].split("(", 1)[0].strip()
-                    if stripped in translation_map:
-                        translations.update(translation_map[stripped])
-            if translations:
-                ordered = sorted(set(translations))
-                sense["glosses"] = ordered
-                sense["raw_glosses"] = ordered
-
-    def _ensure_translated_glosses(
-        self,
-        base_path: Path,
-        in_lang: str,  # noqa: ARG002
-        out_lang: str,
-    ) -> Path:
-        out_code, _ = lang_meta(out_lang)
-        if out_code == "en":
-            return base_path
-
-        translation_map = self._load_translation_map("English", out_lang)
-        localized = base_path.with_name(f"{base_path.stem}__to_{out_code}.jsonl")
-        if localized.exists() and localized.stat().st_mtime >= base_path.stat().st_mtime:
-            return localized
-        with (
-            base_path.open("r", encoding="utf-8") as src,
-            localized.open("w", encoding="utf-8") as dst,
-        ):
-            for line in src:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                self._apply_translation_glosses(entry, translation_map)
-                dst.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        return localized
-
-    def _ensure_raw_dump(self) -> Path:
-        raw_dir = self.cache_dir / RAW_CACHE_DIR
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        target = raw_dir / Path(RAW_DUMP_URL).name
-        if target.exists():
-            return target
-
-        try:
-            response = self.session.get(RAW_DUMP_URL, stream=True, timeout=120)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise KaikkiDownloadError(
-                f"Failed to download Kaikki raw dump from {RAW_DUMP_URL}: {exc}",
-            ) from exc
-
-        headers = getattr(response, "headers", {}) or {}
-        content_length = headers.get("Content-Length")
-        try:
-            total = int(content_length) if content_length else None
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            total = None
-
-        with (
-            self._progress_bar(
-                description="Downloading Kaikki raw dump",
-                total=total,
-                unit="B",
-            ) as advance,
-            target.open("wb") as fh,
-        ):
-            for chunk in response.iter_content(chunk_size=1 << 20):
-                if not chunk:
-                    continue
-                fh.write(chunk)
-                advance(len(chunk))
-
-        return target
-
-    def _ensure_filtered_language(self, language: str) -> tuple[Path, int]:
-        raw_dump = self._ensure_raw_dump()
-
-        filtered_dir = self.cache_dir / FILTERED_CACHE_DIR
-        filtered_dir.mkdir(parents=True, exist_ok=True)
-
-        slug = self._slugify(language)
-        filtered_path = filtered_dir / f"{slug}.jsonl"
-        meta_path = filtered_dir / f"{slug}{META_SUFFIX}"
-        raw_mtime = int(raw_dump.stat().st_mtime)
-
-        if filtered_path.exists() and meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                meta = {}
-            if meta.get("source_mtime") == raw_mtime and meta.get("count"):
-                return filtered_path, int(meta["count"])
-
-        count = 0
-        try:
-            with (
-                self._progress_bar(
-                    description=f"Filtering {language}",
-                ) as advance,
-                gzip.open(raw_dump, "rt", encoding="utf-8") as src,
-                filtered_path.open(
-                    "w",
-                    encoding="utf-8",
-                ) as dst,
-            ):
-                for line in src:
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        raise KaikkiParseError(None, exc) from exc
-
-                    advance(1)
-
-                    entry_language = entry.get("language") or entry.get("lang")
-                    if entry_language == language:
-                        dst.write(line if line.endswith("\n") else f"{line}\n")
-                        count += 1
-        except OSError as exc:
-            raise KaikkiDownloadError(
-                f"Failed to read Kaikki raw dump from {raw_dump}: {exc}",
-            ) from exc
-
-        if count == 0:
-            filtered_path.unlink(missing_ok=True)
-            raise KaikkiDownloadError(
-                f"No entries found for language '{language}' in Kaikki raw dump.",
-            )
-
-        meta_path.write_text(
-            json.dumps({"language": language, "count": count, "source_mtime": raw_mtime}),
-            encoding="utf-8",
-        )
-
-        return filtered_path, count
 
     def _kindle_lang_code(self, code: str | None, override: str | None = None) -> str:
         if override:
@@ -820,179 +513,336 @@ class Builder:
 
         return normalized if normalized in KINDLE_SUPPORTED_LANGS else "en"
 
-    def _export_one(  # noqa: PLR0913,PLR0915
+    def _resolve_source_languages(self, primary: str, iso_code: str) -> list[str]:
+        if iso_code.lower() in {"sr", "hr"}:
+            return sorted({primary, "Serbian", "Croatian"})
+        return [primary]
+
+    def _tatoeba_code(self, iso_code: str) -> str | None:
+        return _TATOEBA_CODE_MAP.get(iso_code.lower())
+
+    def _load_tatoeba(self, source_iso: str, target_iso: str) -> TatoebaExamples | None:
+        source_code = self._tatoeba_code(source_iso)
+        target_code = self._tatoeba_code(target_iso)
+        if not source_code or not target_code:
+            return None
+        try:
+            return TatoebaExamples(
+                source_lang=source_code,
+                target_lang=target_code,
+                cache_dir=self.cache_dir,
+                reset_cache=self._reset_cache,
+            )
+        except TatoebaError as exc:
+            self._console.print(
+                f"[dictforge] Warning: failed to load Tatoeba data ({exc}).",
+                style="yellow",
+            )
+            return None
+
+    def _normalise_key(self, word: str, *, normalize_serbian: bool) -> str:
+        text = word.strip()
+        if normalize_serbian:
+            text = cyr_to_lat(text)
+        return re.sub(r"\s+", " ", text.lower())
+
+    def _normalize_display(self, word: str, *, normalize_serbian: bool) -> str:
+        text = word.strip()
+        if normalize_serbian:
+            text = cyr_to_lat(text)
+        return re.sub(r"\s+", " ", text)
+
+    def _normalize_examples(
         self,
-        in_lang: str,
+        examples: Iterable[tuple[str, str]],
+        *,
+        normalize_serbian: bool,
+    ) -> list[tuple[str, str]]:
+        normalized: list[tuple[str, str]] = []
+        for source, target in examples:
+            source_text = re.sub(r"\s+", " ", source.strip())
+            if normalize_serbian:
+                source_text = cyr_to_lat(source_text)
+            normalized.append((source_text, target.strip()))
+        return normalized
+
+    def _merge_entries(self, target: dict[str, Any], source: dict[str, Any]) -> None:
+        if source is target:
+            return
+        for key in ("senses", "forms"):
+            target_list = target.get(key)
+            source_list = source.get(key)
+            if isinstance(target_list, list) and isinstance(source_list, list):
+                target_list.extend(source_list)
+            elif not target_list and isinstance(source_list, list):
+                target[key] = list(source_list)
+
+    def _apply_tatoeba_enrichment(
+        self,
+        entry: dict[str, Any],
+        examples: list[tuple[str, str]],
+        gloss: str | None,
+        *,
+        normalize_serbian: bool,
+    ) -> bool:
+        changed = False
+        senses = entry.setdefault("senses", [])
+        if not senses:
+            senses.append({})
+        sense = senses[0]
+
+        if gloss and not sense.get("glosses"):
+            sense["glosses"] = [gloss]
+            sense["raw_glosses"] = [gloss]
+            changed = True
+
+        if examples:
+            normalized_examples = self._normalize_examples(
+                examples,
+                normalize_serbian=normalize_serbian,
+            )
+            bucket = sense.setdefault("examples", [])
+            existing = {
+                (example.get("text"), example.get("translation"))
+                for example in bucket
+                if isinstance(example, dict)
+            }
+            for source_text, target_text in normalized_examples:
+                pair = (source_text, target_text)
+                if pair in existing:
+                    continue
+                bucket.append({"text": source_text, "translation": target_text})
+                existing.add(pair)
+                changed = True
+
+        return changed
+
+    def _create_tatoeba_entry(  # noqa: PLR0913
+        self,
+        *,
+        headword: str,
+        display_word: str,
+        matches: list[tuple[str, str]],
+        gloss: str | None,
+        language_name: str,
+        normalize_serbian: bool,
+    ) -> dict[str, Any]:
+        normalized_examples = self._normalize_examples(
+            matches,
+            normalize_serbian=normalize_serbian,
+        )
+        sense: dict[str, Any] = {}
+        if gloss:
+            sense["glosses"] = [gloss]
+            sense["raw_glosses"] = [gloss]
+        if normalized_examples:
+            sense["examples"] = [
+                {"text": src, "translation": tgt} for src, tgt in normalized_examples
+            ]
+        return {
+            "word": display_word,
+            "language": language_name,
+            "senses": [sense] if sense else [],
+            "source": "tatoeba",
+            "key": headword,
+        }
+
+    def _prepare_dataset(  # noqa: C901,PLR0912,PLR0913,PLR0915
+        self,
+        *,
+        source_langs: list[str],
+        primary_language: str,
         out_lang: str,
-        outdir: Path,
-        kindlegen_path: str,
-        title: str,
-        shortname: str,  # noqa: ARG002
-        include_pos: bool,  # noqa: ARG002
-        try_fix_inflections: bool,
-        max_entries: int,  # noqa: ARG002
-        kindle_lang_override: str | None = None,
-    ) -> int:
-        language_file, entry_count = self._ensure_filtered_language(in_lang)
-        language_file = self._ensure_translated_glosses(language_file, in_lang, out_lang)
-        iso_in, _ = lang_meta(in_lang)
-        iso_out, _ = lang_meta(out_lang)
-        kindle_in = self._kindle_lang_code(iso_in)
-        kindle_out = self._kindle_lang_code(iso_out, override=kindle_lang_override)
+        normalize_serbian: bool,
+        tatoeba: TatoebaExamples | None,
+        max_entries: int,
+    ) -> tuple[Path, dict[str, int]]:
+        combined_dir = self.cache_dir / "combined"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{self._slugify('_'.join(source_langs))}__to__{self._slugify(out_lang)}.jsonl"
+        combined_path = combined_dir / filename
 
-        dc = DictionaryCreator(in_lang, out_lang, kaikki_file_path=str(language_file))
-        dc.source_language = kindle_in
-        dc.target_language = kindle_out
-        database_path = self.cache_dir / f"{self._slugify(in_lang)}_{self._slugify(out_lang)}.db"
-        db_capture = _DatabaseProgressCapture(console=self._console, enabled=self._show_progress)
-        db_capture.start()
-        try:
-            with redirect_stdout(db_capture), redirect_stderr(db_capture):  # type: ignore
-                try:
-                    dc.create_database(database_path=str(database_path))
-                except JSONDecodeError as exc:
-                    raise KaikkiParseError(getattr(dc, "kaikki_file_path", None), exc) from exc
-        except Exception:
-            self._emit_creator_output("Database build output", db_capture)
-            raise
-        else:
-            db_capture.finish()
-        finally:
-            db_capture.stop()
-        mobi_base = outdir / f"{in_lang}-{out_lang}"
-        shutil.rmtree(mobi_base, ignore_errors=True)
-        kindle_capture = _KindleProgressCapture(
-            console=self._console,
-            enabled=self._show_progress,
-            total_hint=entry_count if entry_count else None,
-        )
-        kindle_capture.start()
-        fallback_exc: FileNotFoundError | None = None
-        try:
-            with redirect_stdout(kindle_capture), redirect_stderr(kindle_capture):  # type: ignore
-                dc.export_to_kindle(
-                    kindlegen_path=kindlegen_path,
-                    try_to_fix_failed_inflections=try_fix_inflections,  # type: ignore[arg-type]  # bug in the lib
-                    author="Wiktionary via Wiktextract (Kaikki.org)",
-                    title=title,
-                    mobi_temp_folder_path=str(mobi_base),
-                    mobi_output_file_path=f"{mobi_base}.mobi",
+        combined_entries: dict[str, dict[str, Any]] = {}
+        headword_sources: dict[str, set[str]] = {}
+        enriched_from_tatoeba: set[str] = set()
+        kaikki_headwords: set[str] = set()
+        kaikki_total_entries = 0
+
+        tatoeba_vocab: set[str] = set()
+        if tatoeba is not None:
+            try:
+                tatoeba_vocab = tatoeba.vocabulary()
+            except TatoebaError as exc:
+                self._console.print(
+                    f"[dictforge] Warning: failed to read Tatoeba vocabulary ({exc}).",
+                    style="yellow",
                 )
-        except FileNotFoundError as exc:
-            fallback_exc = exc
-        except Exception:
-            self._emit_creator_output("Kindle export output", kindle_capture)
-            raise
-        else:
-            kindle_capture.finish()
-        finally:
-            kindle_capture.stop()
+                tatoeba_vocab = set()
 
-        if fallback_exc is None:
-            self._announce_summary(in_lang, out_lang, entry_count, kindle_capture)
-            return entry_count
+        for language in source_langs:
+            filtered_path, count = self.kaikki.ensure_filtered_language(language)
+            kaikki_total_entries += count
+            data_path = filtered_path
+            target_iso_code, _ = lang_meta(out_lang)
+            if target_iso_code != "en":
+                data_path = self.kaikki.ensure_translated_glosses(
+                    filtered_path,
+                    "English",
+                    out_lang,
+                )
 
-        opf_path = mobi_base / "OEBPS" / "content.opf"
-        if not opf_path.exists():
-            raise KindleBuildError(
-                "Kindle Previewer failed and content.opf is missing; see previous output.",
-            ) from fallback_exc
+            with data_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    word = entry.get("word")
+                    if not isinstance(word, str):
+                        continue
+                    display_word = self._normalize_display(
+                        word,
+                        normalize_serbian=normalize_serbian,
+                    )
+                    key = self._normalise_key(display_word, normalize_serbian=normalize_serbian)
+                    if not key:
+                        continue
+                    entry["word"] = display_word
+                    if normalize_serbian:
+                        for form in entry.get("forms") or []:
+                            if isinstance(form, dict) and isinstance(form.get("form"), str):
+                                form["form"] = self._normalize_display(
+                                    form["form"],
+                                    normalize_serbian=True,
+                                )
+
+                    base = combined_entries.get(key)
+                    if base is None:
+                        combined_entries[key] = entry
+                        base = entry
+                    else:
+                        self._merge_entries(base, entry)
+
+                    sources = headword_sources.setdefault(key, set())
+                    sources.add("kaikki")
+                    kaikki_headwords.add(key)
+
+                    if tatoeba is not None:
+                        examples = tatoeba.get_examples_for(display_word)
+                        gloss = tatoeba.get_gloss_for(display_word)
+                        if examples or gloss:
+                            changed = self._apply_tatoeba_enrichment(
+                                base,
+                                examples,
+                                gloss,
+                                normalize_serbian=normalize_serbian,
+                            )
+                            if changed:
+                                sources.add("tatoeba")
+                                enriched_from_tatoeba.add(key)
+
+        if tatoeba is not None:
+            for key in sorted(tatoeba_vocab):
+                sources = headword_sources.setdefault(key, set())
+                sources.add("tatoeba")
+                if key in combined_entries:
+                    continue
+                examples = tatoeba.get_examples_for(key)
+                gloss = tatoeba.get_gloss_for(key)
+                if not examples and not gloss:
+                    continue
+                display_word = examples[0][0] if examples else key
+                display_word = self._normalize_display(
+                    display_word,
+                    normalize_serbian=normalize_serbian,
+                )
+                entry = self._create_tatoeba_entry(
+                    headword=key,
+                    display_word=display_word,
+                    matches=examples,
+                    gloss=gloss,
+                    language_name=primary_language,
+                    normalize_serbian=normalize_serbian,
+                )
+                entry.pop("key", None)
+                combined_entries[key] = entry
+
+        ordered_keys = sorted(combined_entries.keys())
+        if max_entries > 0:
+            ordered_keys = ordered_keys[:max_entries]
+
+        with combined_path.open("w", encoding="utf-8") as fh:
+            for key in ordered_keys:
+                entry = combined_entries[key]
+                fh.write(json.dumps(entry, ensure_ascii=False))
+                fh.write("\n")
+
+        stats = {
+            "kaikki_total": kaikki_total_entries,
+            "kaikki_unique": len(kaikki_headwords),
+            "tatoeba_total": len(tatoeba_vocab),
+            "tatoeba_unique": len(tatoeba_vocab),
+            "overlap": len(kaikki_headwords & tatoeba_vocab),
+            "enriched_from_tatoeba": len(enriched_from_tatoeba),
+            "final_headword_count": len(ordered_keys),
+        }
+
+        return combined_path, stats
+
+    def _print_stats(self, stats: dict[str, int]) -> None:
+        self._console.print("[dictforge] Source statistics", style="cyan")
         self._console.print(
-            "[dictforge] Kindle Previewer fallback: fixing metadata and retrying",
-            style="yellow",
+            f"  Kaikki headwords: {stats['kaikki_total']:,} (unique {stats['kaikki_unique']:,})",
+            style="dim",
         )
-        self._ensure_opf_languages(opf_path, kindle_in, kindle_out, title)
-        self._run_kindlegen(kindlegen_path, opf_path)
-        mobi_path = mobi_base / "OEBPS" / "content.mobi"
-        if not mobi_path.exists():
-            raise KindleBuildError(
-                "Kindle Previewer did not produce content.mobi even after fixing metadata.",
-            ) from fallback_exc
-        final_path = Path(f"{mobi_base}.mobi")
-        shutil.move(mobi_path, final_path)
-        dc.mobi_path = str(final_path)
-        shutil.rmtree(mobi_base, ignore_errors=True)
+        self._console.print(
+            (
+                "  Tatoeba expressions: "
+                f"{stats['tatoeba_total']:,} (unique {stats['tatoeba_unique']:,})"
+            ),
+            style="dim",
+        )
+        self._console.print(
+            f"  Overlap: {stats['overlap']:,}",
+            style="dim",
+        )
+        self._console.print(
+            f"  Enriched from Tatoeba: {stats['enriched_from_tatoeba']:,}",
+            style="dim",
+        )
+        self._console.print(
+            f"  Final dictionary size: {stats['final_headword_count']:,}",
+            style="dim",
+        )
 
-        self._announce_summary(in_lang, out_lang, entry_count, kindle_capture)
-        return entry_count
-
-    def _ensure_opf_languages(  # noqa: PLR0912,C901
+    def _ensure_opf_languages(
         self,
         opf_path: Path,
-        primary_code: str,
-        secondary_code: str,
+        kindle_in: str,
+        kindle_out: str,
         title: str,
     ) -> None:
-        print(
-            (
-                f"[dictforge] Preparing OPF languages: source→'{primary_code}', "
-                f"target→'{secondary_code}'"
-            ),
-            flush=True,
-        )
-
+        if not opf_path.exists():
+            raise KindleBuildError("content.opf is missing; cannot update languages.")
         tree = ET.parse(opf_path)
-        ns = {
-            "opf": "http://www.idpf.org/2007/opf",
-            "dc": "http://purl.org/dc/elements/1.1/",
-            "legacy": "http://purl.org/metadata/dublin_core",
-        }
-        ET.register_namespace("", ns["opf"])
-        ET.register_namespace("dc", ns["dc"])
-        metadata = tree.find("opf:metadata", ns)
-        if metadata is None:
-            metadata = ET.SubElement(tree.getroot(), "{http://www.idpf.org/2007/opf}metadata")
-
-        # modern dc:title/creator fallbacks
-        if metadata.find("dc:title", ns) is None:
-            title_elem = ET.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}title")
-            title_elem.text = title or "dictforge dictionary"
-
-        if metadata.find("dc:creator", ns) is None:
-            legacy = metadata.find("opf:dc-metadata", ns)
-            creator_text = None
-            if legacy is not None:
-                legacy_creator = legacy.find("legacy:Creator", ns)
-                if legacy_creator is not None:
-                    creator_text = legacy_creator.text
-            ET.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}creator").text = (
-                creator_text or "dictforge"
-            )
-
-        # modern dc:language entries
-        for elem in list(metadata.findall("dc:language", ns)):
-            metadata.remove(elem)
-        ET.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}language").text = primary_code
-
-        # legacy dc-metadata block
-        legacy = metadata.find("opf:dc-metadata", ns)
-        if legacy is not None:
-            for elem in legacy.findall("legacy:Language", ns):
-                elem.text = primary_code
-            if legacy.find("legacy:Title", ns) is None:
-                ET.SubElement(legacy, "{http://purl.org/metadata/dublin_core}Title").text = title
-            if legacy.find("legacy:Creator", ns) is None:
-                ET.SubElement(
-                    legacy,
-                    "{http://purl.org/metadata/dublin_core}Creator",
-                ).text = "dictforge"
-
-        # x-metadata block used by Kindle dictionaries
-        x_metadata = metadata.find("opf:x-metadata", ns)
-        if x_metadata is not None:
-            dict_in = x_metadata.find("opf:DictionaryInLanguage", ns)
-            if dict_in is not None:
-                dict_in.text = primary_code
-            dict_out = x_metadata.find("opf:DictionaryOutLanguage", ns)
-            if dict_out is not None:
-                dict_out.text = secondary_code
-            default_lookup = x_metadata.find("opf:DefaultLookupIndex", ns)
-            if default_lookup is None:
-                ET.SubElement(
-                    x_metadata,
-                    "{http://www.idpf.org/2007/opf}DefaultLookupIndex",
-                ).text = "default"
-
+        root = tree.getroot()
+        ns = {"dc": "http://purl.org/dc/elements/1.1/", "opf": "http://www.idpf.org/2007/opf"}
+        title_elem = root.find("dc:title", ns)
+        if title_elem is not None:
+            title_elem.text = title
+        lang_elem = root.find("dc:language", ns)
+        if lang_elem is not None:
+            lang_elem.text = kindle_out
+        xmetadata = root.find("opf:metadata", ns)
+        if xmetadata is not None:
+            in_elem = xmetadata.find("opf:DictionaryInLanguage", ns)
+            out_elem = xmetadata.find("opf:DictionaryOutLanguage", ns)
+            if in_elem is not None:
+                in_elem.text = kindle_in
+            if out_elem is not None:
+                out_elem.text = kindle_out
         tree.write(opf_path, encoding="utf-8", xml_declaration=True)
 
     def _run_kindlegen(self, kindlegen_path: str, opf_path: Path) -> None:
@@ -1012,6 +862,120 @@ class Builder:
                 f"STDOUT:\n{process.stdout}\nSTDERR:\n{process.stderr}",
             )
 
+    # ------------------------------------------------------------------
+    def _export_one(  # noqa: C901,PLR0913,PLR0915
+        self,
+        in_lang: str,
+        out_lang: str,
+        outdir: Path,
+        kindlegen_path: str,
+        title: str,
+        shortname: str,  # noqa: ARG002
+        include_pos: bool,  # noqa: ARG002
+        try_fix_inflections: bool,
+        max_entries: int,
+        kindle_lang_override: str | None = None,
+    ) -> int:
+        in_iso, _ = lang_meta(in_lang)
+        out_iso, _ = lang_meta(out_lang)
+        normalize_serbian = in_iso.lower() in {"sr", "hr"}
+        source_langs = self._resolve_source_languages(in_lang, in_iso)
+        tatoeba = self._load_tatoeba(in_iso, out_iso)
+
+        combined_path, stats = self._prepare_dataset(
+            source_langs=source_langs,
+            primary_language=in_lang,
+            out_lang=out_lang,
+            normalize_serbian=normalize_serbian,
+            tatoeba=tatoeba,
+            max_entries=max_entries,
+        )
+
+        self._print_stats(stats)
+
+        entry_count = stats["final_headword_count"]
+        kindle_in = self._kindle_lang_code(in_iso)
+        kindle_out = self._kindle_lang_code(out_iso, override=kindle_lang_override)
+
+        dc = DictionaryCreator(in_lang, out_lang, kaikki_file_path=str(combined_path))
+        dc.source_language = kindle_in
+        dc.target_language = kindle_out
+        database_path = self.cache_dir / f"{self._slugify(in_lang)}_{self._slugify(out_lang)}.db"
+        db_capture = _DatabaseProgressCapture(console=self._console, enabled=self._show_progress)
+        db_capture.start()
+        try:
+            with (
+                redirect_stdout(cast(TextIO, db_capture)),
+                redirect_stderr(
+                    cast(TextIO, db_capture),
+                ),
+            ):
+                try:
+                    dc.create_database(database_path=str(database_path))
+                except JSONDecodeError as exc:
+                    raise KaikkiParseError(getattr(dc, "kaikki_file_path", None), exc) from exc
+        except Exception:
+            self._emit_creator_output("Database build output", db_capture)
+            raise
+        else:
+            db_capture.finish()
+        finally:
+            db_capture.stop()
+
+        mobi_base = outdir / f"{self._slugify(in_lang)}-{self._slugify(out_lang)}"
+        shutil.rmtree(mobi_base, ignore_errors=True)
+        kindle_capture = _KindleProgressCapture(
+            console=self._console,
+            enabled=self._show_progress,
+            total_hint=entry_count if entry_count else None,
+        )
+        kindle_capture.start()
+        fallback_exc: FileNotFoundError | None = None
+        try:
+            with (
+                redirect_stdout(cast(TextIO, kindle_capture)),
+                redirect_stderr(
+                    cast(TextIO, kindle_capture),
+                ),
+            ):
+                dc.export_to_kindle(
+                    kindlegen_path=kindlegen_path,
+                    try_to_fix_failed_inflections=try_fix_inflections,  # type: ignore[arg-type]
+                    author="Wiktionary via Wiktextract (Kaikki.org)",
+                    title=title,
+                    mobi_temp_folder_path=str(mobi_base),
+                    mobi_output_file_path=f"{mobi_base}.mobi",
+                )
+        except FileNotFoundError as exc:
+            fallback_exc = exc
+        except Exception:
+            self._emit_creator_output("Kindle export output", kindle_capture)
+            raise
+        else:
+            kindle_capture.finish()
+        finally:
+            kindle_capture.stop()
+
+        if fallback_exc is not None:
+            kindle_path = Path(kindlegen_path)
+            if kindle_path.exists():
+                raise fallback_exc from fallback_exc
+            opf_path = mobi_base / "OEBPS" / "content.opf"
+            self._ensure_opf_languages(opf_path, kindle_in, kindle_out, title)
+            self._run_kindlegen(kindlegen_path, opf_path)
+
+        mobi_path = mobi_base.with_suffix(".mobi")
+        if mobi_path.exists():
+            target_path = outdir / f"{self._slugify(in_lang)}-{self._slugify(out_lang)}.mobi"
+            if mobi_path != target_path:
+                shutil.copyfile(mobi_path, target_path)
+
+        self._announce_summary(in_lang, out_lang, entry_count, kindle_capture)
+        self._emit_creator_output("Kindle export output", kindle_capture)
+
+        return entry_count
+
+    # ------------------------------------------------------------------
     def build_dictionary(  # noqa: PLR0913
         self,
         in_langs: list[str],
@@ -1026,7 +990,7 @@ class Builder:
         kindle_lang_override: str | None = None,
     ) -> dict[str, int]:
         primary = in_langs[0]
-        counts = {}
+        counts: dict[str, int] = {}
         counts[primary] = self._export_one(
             primary,
             out_lang,
@@ -1041,7 +1005,7 @@ class Builder:
         )
 
         for extra in in_langs[1:]:
-            extra_out = outdir / f"extra_{extra.replace(' ', '_')}"
+            extra_out = outdir / f"extra_{self._slugify(extra)}"
             extra_out.mkdir(parents=True, exist_ok=True)
             counts[extra] = self._export_one(
                 extra,
@@ -1056,5 +1020,13 @@ class Builder:
                 kindle_lang_override,
             )
 
-        self.session.close()
+        self.kaikki.close()
         return counts
+
+
+__all__ = [
+    "Builder",
+    "KindleBuildError",
+    "KaikkiDownloadError",
+    "KaikkiParseError",
+]
