@@ -16,6 +16,7 @@ from urllib.request import urlopen
 from .translit import cyr_to_lat
 
 TATOEBA_EXPORT_ROOT = "https://downloads.tatoeba.org/exports/per_language"
+TATOEBA_LINKS_ROOT = "https://downloads.tatoeba.org/exports"
 MAX_WORDS = 3
 SENTENCE_FILES = (
     "sentences.tar.bz2",
@@ -47,6 +48,8 @@ class _SentencePair:
 
 class TatoebaExamples:
     """Download, cache, and expose aligned example pairs from Tatoeba."""
+
+    _global_links_path: Path
 
     def __init__(
         self,
@@ -104,19 +107,19 @@ class TatoebaExamples:
             self._pairs = {key: [(src, tgt) for src, tgt in value] for key, value in data.items()}
             return self._pairs
 
-        source_sentences = self._collect_sentences(self._source_langs)
+        source_sentences, source_lang_map = self._collect_sentences(self._source_langs)
         if not source_sentences:
             self._pairs_cache.write_text("{}", encoding="utf-8")
             self._pairs = {}
             return self._pairs
 
-        target_sentences = self._collect_sentences(self._target_langs)
+        target_sentences, _ = self._collect_sentences(self._target_langs)
         if not target_sentences:
             self._pairs_cache.write_text("{}", encoding="utf-8")
             self._pairs = {}
             return self._pairs
 
-        links = self._collect_links(self._source_langs)
+        links = self._collect_links(self._source_langs, source_lang_map)
         if not links:
             self._pairs_cache.write_text("{}", encoding="utf-8")
             self._pairs = {}
@@ -148,40 +151,68 @@ class TatoebaExamples:
         self._pairs = pairs
         return pairs
 
-    def _collect_sentences(self, language_codes: set[str]) -> dict[str, str]:
+    def _collect_sentences(self, language_codes: set[str]) -> tuple[dict[str, str], dict[str, str]]:
         sentences: dict[str, str] = {}
+        sentence_lang: dict[str, str] = {}
         for lang in language_codes:
-            path = self._download_first_available(
-                lang,
-                (
-                    f"{lang}_sentences.tsv.bz2",
-                    f"{lang}_sentences.csv.bz2",
-                    f"{lang}_sentences.tsv",
-                    f"{lang}_sentences.csv",
-                    *SENTENCE_FILES,
-                ),
-            )
+            candidates: list[str] = [
+                f"{lang}_sentences.tsv.bz2",
+                f"{lang}_sentences.csv.bz2",
+                f"{lang}_sentences.tsv",
+                f"{lang}_sentences.csv",
+            ]
+            candidates.extend(SENTENCE_FILES)
+            path = self._download_first_available(lang, candidates)
             if path is None:
                 continue
-            sentences.update(self._extract_sentences(path, lang))
-        return sentences
+            extracted = self._extract_sentences(path, lang)
+            sentences.update(extracted)
+            sentence_lang.update(dict.fromkeys(extracted, lang))
+        return sentences, sentence_lang
 
-    def _collect_links(self, language_codes: set[str]) -> dict[str, dict[str, set[str]]]:
+    def _collect_links(
+        self,
+        language_codes: set[str],
+        sentence_lang: dict[str, str],
+    ) -> dict[str, dict[str, set[str]]]:
         links: dict[str, dict[str, set[str]]] = {}
+        missing: list[str] = []
         for lang in language_codes:
-            path = self._download_first_available(
-                lang,
-                (
+            candidates: list[str] = []
+            for target in self._target_langs:
+                pair = f"{lang}-{target}"
+                candidates.extend(
+                    [
+                        f"{pair}_links.tsv.bz2",
+                        f"{pair}_links.csv.bz2",
+                        f"{pair}_links.tsv",
+                        f"{pair}_links.csv",
+                    ],
+                )
+            candidates.extend(
+                [
                     f"{lang}_links.tsv.bz2",
                     f"{lang}_links.csv.bz2",
                     f"{lang}_links.tsv",
                     f"{lang}_links.csv",
-                    *LINK_FILES,
-                ),
+                ],
             )
+            candidates.extend(LINK_FILES)
+            path = self._download_first_available(lang, candidates)
             if path is None:
+                missing.append(lang)
                 continue
             links[lang] = self._extract_links(path)
+
+        if missing:
+            global_links = self._extract_links(self._ensure_global_links())
+            for lang in missing:
+                subset: dict[str, set[str]] = {}
+                for src, targets in global_links.items():
+                    if sentence_lang.get(src) != lang:
+                        continue
+                    subset[src] = targets
+                links[lang] = subset
         return links
 
     def _extract_sentences(self, archive_path: Path, lang_code: str) -> dict[str, str]:
@@ -236,6 +267,18 @@ class TatoebaExamples:
         if destination.exists():
             return destination
 
+        legacy_candidates = [
+            self._root / local_name,
+            self._root / filename,
+        ]
+        for candidate in legacy_candidates:
+            if candidate.exists():
+                try:
+                    shutil.copyfile(candidate, destination)
+                except OSError:
+                    continue
+                return destination
+
         url = f"{TATOEBA_EXPORT_ROOT}/{language_code}/{filename}"
         try:
             with urlopen(url, timeout=180) as response, destination.open("wb") as handle:  # noqa: S310
@@ -255,6 +298,30 @@ class TatoebaExamples:
             except TatoebaError:
                 continue
         return None
+
+    def _ensure_global_links(self) -> Path:
+        if hasattr(self, "_global_links_path"):
+            path = self._global_links_path
+            if isinstance(path, Path) and path.exists():
+                return path
+
+        global_dir = self._root / "global"
+        global_dir.mkdir(parents=True, exist_ok=True)
+        for filename in ("links.csv.bz2", "links.csv", "links.tar.bz2"):
+            destination = global_dir / filename
+            url = f"{TATOEBA_LINKS_ROOT}/{filename}"
+            if destination.exists():
+                self._global_links_path = destination
+                return destination
+            try:
+                with urlopen(url, timeout=180) as response, destination.open("wb") as handle:  # noqa: S310
+                    shutil.copyfileobj(response, handle)
+            except (HTTPError, URLError, OSError):
+                destination.unlink(missing_ok=True)
+                continue
+            self._global_links_path = destination
+            return destination
+        raise TatoebaError("Failed to download Tatoeba global links dataset")
 
     @staticmethod
     def _find_member(archive: tarfile.TarFile, *, target_suffix: str) -> tarfile.TarInfo | None:

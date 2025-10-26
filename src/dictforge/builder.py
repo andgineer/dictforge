@@ -643,6 +643,7 @@ class Builder:
             "word": display_word,
             "language": language_name,
             "senses": [sense] if sense else [],
+            "pos": "phrase",
             "source": "tatoeba",
         }
 
