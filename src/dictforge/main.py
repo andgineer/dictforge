@@ -12,7 +12,7 @@ from dictforge import __version__
 
 from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
 from .config import config_path, load_config, save_config
-from .kindle import guess_kindlegen_path
+from .kindlegen import guess_kindlegen_path
 from .langutil import lang_meta, make_defaults, normalize_input_name
 
 # rich-click styling

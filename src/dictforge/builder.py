@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import gzip
+import copy
 import io
 import json
 import re
@@ -8,13 +8,12 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterator
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from html.parser import HTMLParser
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import requests
 from ebook_dictionary_creator import DictionaryCreator
@@ -30,18 +29,10 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from .source_base import DictionarySource
 
 from .langutil import lang_meta
-
-RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"
-RAW_CACHE_DIR = "raw"
-FILTERED_CACHE_DIR = "filtered"
-META_SUFFIX = ".meta.json"
-RESPONSE_EXCERPT_MAX_LENGTH = 200
-ELLIPSE = "..."
-LANGUAGE_CACHE_DIR = "languages"
-TRANSLATION_CACHE_DIR = "translations"
-LANGUAGE_DUMP_URL = "https://kaikki.org/dictionary/{lang}/kaikki.org-dictionary-{slug}.jsonl"
+from .source_kaikki import KaikkiDownloadError, KaikkiParseError, KaikkiSource
 
 KINDLE_SUPPORTED_LANGS = {
     "af",
@@ -190,63 +181,8 @@ KINDLE_SUPPORTED_LANGS = {
 }
 
 
-class KaikkiDownloadError(RuntimeError):
-    """Raised when Kaikki resources cannot be downloaded."""
-
-
 class KindleBuildError(RuntimeError):
     """Raised when kindlegen fails while creating the MOBI file."""
-
-
-class KaikkiParseError(RuntimeError):
-    """Raised when the Kaikki JSON dump cannot be parsed."""
-
-    def __init__(self, path: str | Path | None, exc: JSONDecodeError):
-        self.path = Path(path) if path else None
-        location = f"line {exc.lineno}, column {exc.colno}" if exc.lineno else f"position {exc.pos}"
-        path_hint = str(self.path) if self.path else "<unknown Kaikki file>"
-        message = f"Failed to parse Kaikki JSON at {path_hint} ({location}): {exc.msg}."
-        super().__init__(message)
-        self.lineno = exc.lineno
-        self.colno = exc.colno
-        self.original_error = exc
-        doc_snippet = getattr(exc, "doc", "").strip()
-        self.excerpt = self._load_excerpt() if self.path else ([doc_snippet] if doc_snippet else [])
-
-    class _HTMLStripper(HTMLParser):
-        def __init__(self) -> None:
-            super().__init__()
-            self.chunks: list[str] = []
-
-        def handle_data(self, data: str) -> None:  # noqa: D401
-            text = data.strip()
-            if text:
-                self.chunks.append(text)
-
-    def _load_excerpt(self, limit: int = 3) -> list[str]:
-        if not self.path or not self.path.exists():
-            return []
-        try:
-            with self.path.open("r", encoding="utf-8", errors="ignore") as fh:
-                content = fh.read(4096)
-        except OSError:
-            return []
-
-        raw_lines = [line.strip() for line in content.splitlines() if line.strip()]
-        if raw_lines and raw_lines[0].startswith("<"):
-            stripper = self._HTMLStripper()
-            stripper.feed(content)
-            text_lines = stripper.chunks
-        else:
-            text_lines = raw_lines
-
-        excerpt = text_lines[:limit]
-        return [
-            line
-            if len(line) <= RESPONSE_EXCERPT_MAX_LENGTH
-            else f"{line[: RESPONSE_EXCERPT_MAX_LENGTH - len(ELLIPSE)]}{ELLIPSE}"
-            for line in excerpt
-        ]
 
 
 def _format_units(task: Task, unit: str) -> str:
@@ -454,15 +390,28 @@ class _KindleProgressCapture(_BaseProgressCapture):
 class Builder:
     """
     Thin wrapper around ebook_dictionary_creator.
-    Downloads Kaikki data, builds DB, exports Kindle dictionary.
+    Aggregates entries from configured sources and exports Kindle dictionaries.
     """
 
-    def __init__(self, cache_dir: Path, show_progress: bool | None = None):
+    def __init__(
+        self,
+        cache_dir: Path,
+        show_progress: bool | None = None,
+        sources: Iterable[DictionarySource] | None = None,
+    ):
         self.cache_dir = cache_dir
         self.session = requests.Session()
-        self._translation_cache: dict[tuple[str, str], dict[str, list[str]]] = {}
         self._show_progress = sys.stderr.isatty() if show_progress is None else show_progress
         self._console = Console(stderr=True, force_terminal=self._show_progress)
+        if sources is None:
+            default_source = KaikkiSource(
+                cache_dir=self.cache_dir,
+                session=self.session,
+                progress_factory=self._progress_bar,
+            )
+            self._sources = [default_source]
+        else:
+            self._sources = list(sources)
 
     @contextmanager
     def _progress_bar(
@@ -534,261 +483,101 @@ class Builder:
             style="green",
         )
 
+    def _prepare_combined_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: C901
+        if len(self._sources) == 1:
+            return self._sources[0].get_entries(in_lang, out_lang)
+
+        combined_dir = self.cache_dir / "combined"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        source_tag = "_".join(type(src).__name__ for src in self._sources)
+        filename = f"{self._slugify(in_lang)}__{self._slugify(out_lang)}__{self._slugify(source_tag)}.jsonl"
+        combined_path = combined_dir / filename
+
+        merged_entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        for source in self._sources:
+            data_path, _ = source.get_entries(in_lang, out_lang)
+            try:
+                with data_path.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        payload = line.strip()
+                        if not payload:
+                            continue
+                        try:
+                            entry = json.loads(payload)
+                        except json.JSONDecodeError as exc:
+                            raise KaikkiParseError(data_path, exc) from exc
+                        word = entry.get("word")
+                        if not isinstance(word, str):
+                            continue
+                        key = word.lower()
+                        if key not in merged_entries:
+                            merged_entries[key] = copy.deepcopy(entry)
+                        else:
+                            self._merge_entry(merged_entries[key], entry)
+            except OSError as exc:
+                raise KaikkiDownloadError(
+                    f"Failed to read source dataset '{data_path}': {exc}",
+                ) from exc
+
+        if not merged_entries:
+            raise KaikkiDownloadError(
+                f"No entries produced by configured sources for {in_lang} → {out_lang}.",
+            )
+
+        with combined_path.open("w", encoding="utf-8") as dst:
+            for entry in merged_entries.values():
+                dst.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        return combined_path, len(merged_entries)
+
+    def _merge_entry(self, target: dict[str, Any], incoming: dict[str, Any]) -> None:
+        target_senses = target.get("senses")
+        incoming_senses = incoming.get("senses")
+        if not isinstance(target_senses, list) or not isinstance(incoming_senses, list):
+            return
+
+        index: dict[tuple[str, ...], dict[str, Any]] = {}
+        for sense in target_senses:
+            if not isinstance(sense, dict):
+                continue
+            glosses = sense.get("glosses")
+            if isinstance(glosses, list) and glosses:
+                key = tuple(str(g) for g in glosses)
+                index[key] = sense
+
+        for sense in incoming_senses:
+            if not isinstance(sense, dict):
+                continue
+            glosses = sense.get("glosses")
+            if isinstance(glosses, list) and glosses:
+                key = tuple(str(g) for g in glosses)
+                self._merge_examples(index[key], sense)
+            else:
+                target_senses.append(copy.deepcopy(sense))
+
+    def _merge_examples(self, target_sense: dict[str, Any], incoming_sense: dict[str, Any]) -> None:
+        incoming_examples = incoming_sense.get("examples")
+        if not isinstance(incoming_examples, list) or not incoming_examples:
+            return
+
+        target_examples = target_sense.get("examples")
+        if not isinstance(target_examples, list):
+            target_examples = []
+            target_sense["examples"] = target_examples
+
+        for example in incoming_examples:
+            exemplar = copy.deepcopy(example)
+            if exemplar not in target_examples:
+                target_examples.append(exemplar)
+
     def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
         # Placeholder for future caching/version pinning; ensure dir exists.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        for source in self._sources:
+            source.ensure_download(force=force)
 
     def _slugify(self, value: str) -> str:
         return re.sub(r"[^A-Za-z0-9]+", "_", value.strip()) or "language"
-
-    def _kaikki_slug(self, language: str) -> str:
-        return language.replace(" ", "").replace("-", "").replace("'", "")
-
-    def _ensure_language_dataset(self, language: str) -> Path:
-        lang_dir = self.cache_dir / LANGUAGE_CACHE_DIR
-        lang_dir.mkdir(parents=True, exist_ok=True)
-        slug = self._kaikki_slug(language)
-        filename = f"kaikki.org-dictionary-{slug}.jsonl"
-        target = lang_dir / filename
-        if target.exists():
-            return target
-
-        url = LANGUAGE_DUMP_URL.format(lang=quote(language, safe="-"), slug=slug)
-        try:
-            response = self.session.get(url, stream=True, timeout=180)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise KaikkiDownloadError(
-                f"Failed to download Kaikki dump for {language} from {url}: {exc}",
-            ) from exc
-
-        headers = getattr(response, "headers", {}) or {}
-        content_length = headers.get("Content-Length")
-        try:
-            total = int(content_length) if content_length else None
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            total = None
-
-        with (
-            self._progress_bar(
-                description=f"Downloading {language}",
-                total=total,
-                unit="B",
-            ) as advance,
-            target.open("wb") as fh,
-        ):
-            for chunk in response.iter_content(chunk_size=1 << 20):
-                if not chunk:
-                    continue
-                fh.write(chunk)
-                advance(len(chunk))
-
-        return target
-
-    def _load_translation_map(self, source_lang: str, target_lang: str) -> dict[str, list[str]]:
-        key = (source_lang.lower(), target_lang.lower())
-        cached = self._translation_cache.get(key)
-        if cached is not None:
-            return cached
-
-        cache_dir = self.cache_dir / TRANSLATION_CACHE_DIR
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        source_slug = self._kaikki_slug(source_lang)
-        target_slug = self._kaikki_slug(target_lang)
-        cache_path = cache_dir / f"{source_slug}_to_{target_slug}.json"
-
-        source_dump = self._ensure_language_dataset(source_lang)
-        if cache_path.exists() and cache_path.stat().st_mtime >= source_dump.stat().st_mtime:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
-            self._translation_cache[key] = {k: list(v) for k, v in data.items()}
-            return self._translation_cache[key]
-
-        mapping: dict[str, list[str]] = {}
-        try:
-            with source_dump.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    translations = {
-                        tr["word"]
-                        for sense in entry.get("senses", [])
-                        for tr in sense.get("translations") or []
-                        if tr.get("lang") == target_lang and tr.get("word")
-                    }
-                    if translations:
-                        mapping[entry["word"].lower()] = sorted(translations)
-        except OSError as exc:
-            raise KaikkiDownloadError(
-                f"Failed to read Kaikki dump for {source_lang}: {exc}",
-            ) from exc
-
-        cache_path.write_text(
-            json.dumps(mapping, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
-        self._translation_cache[key] = mapping
-        return mapping
-
-    def _apply_translation_glosses(  # noqa: C901
-        self,
-        entry: dict[str, Any],
-        translation_map: dict[str, list[str]],
-    ) -> None:
-        senses = entry.get("senses") or []
-        for sense in senses:
-            translations: set[str] = set()
-            for link in sense.get("links") or []:
-                if not isinstance(link, (list, tuple)) or not link:
-                    continue
-                pivot = link[0]
-                if isinstance(pivot, str):
-                    translations.update(translation_map.get(pivot.lower(), []))
-            if not translations:
-                for gloss in sense.get("glosses") or []:
-                    if not isinstance(gloss, str):
-                        continue
-                    candidate = gloss.lower()
-                    if candidate in translation_map:
-                        translations.update(translation_map[candidate])
-                        continue
-                    stripped = candidate.split(";", 1)[0].split("(", 1)[0].strip()
-                    if stripped in translation_map:
-                        translations.update(translation_map[stripped])
-            if translations:
-                ordered = sorted(set(translations))
-                sense["glosses"] = ordered
-                sense["raw_glosses"] = ordered
-
-    def _ensure_translated_glosses(
-        self,
-        base_path: Path,
-        in_lang: str,  # noqa: ARG002
-        out_lang: str,
-    ) -> Path:
-        out_code, _ = lang_meta(out_lang)
-        if out_code == "en":
-            return base_path
-
-        translation_map = self._load_translation_map("English", out_lang)
-        localized = base_path.with_name(f"{base_path.stem}__to_{out_code}.jsonl")
-        if localized.exists() and localized.stat().st_mtime >= base_path.stat().st_mtime:
-            return localized
-        with (
-            base_path.open("r", encoding="utf-8") as src,
-            localized.open("w", encoding="utf-8") as dst,
-        ):
-            for line in src:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                self._apply_translation_glosses(entry, translation_map)
-                dst.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        return localized
-
-    def _ensure_raw_dump(self) -> Path:
-        raw_dir = self.cache_dir / RAW_CACHE_DIR
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        target = raw_dir / Path(RAW_DUMP_URL).name
-        if target.exists():
-            return target
-
-        try:
-            response = self.session.get(RAW_DUMP_URL, stream=True, timeout=120)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise KaikkiDownloadError(
-                f"Failed to download Kaikki raw dump from {RAW_DUMP_URL}: {exc}",
-            ) from exc
-
-        headers = getattr(response, "headers", {}) or {}
-        content_length = headers.get("Content-Length")
-        try:
-            total = int(content_length) if content_length else None
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            total = None
-
-        with (
-            self._progress_bar(
-                description="Downloading Kaikki raw dump",
-                total=total,
-                unit="B",
-            ) as advance,
-            target.open("wb") as fh,
-        ):
-            for chunk in response.iter_content(chunk_size=1 << 20):
-                if not chunk:
-                    continue
-                fh.write(chunk)
-                advance(len(chunk))
-
-        return target
-
-    def _ensure_filtered_language(self, language: str) -> tuple[Path, int]:
-        raw_dump = self._ensure_raw_dump()
-
-        filtered_dir = self.cache_dir / FILTERED_CACHE_DIR
-        filtered_dir.mkdir(parents=True, exist_ok=True)
-
-        slug = self._slugify(language)
-        filtered_path = filtered_dir / f"{slug}.jsonl"
-        meta_path = filtered_dir / f"{slug}{META_SUFFIX}"
-        raw_mtime = int(raw_dump.stat().st_mtime)
-
-        if filtered_path.exists() and meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                meta = {}
-            if meta.get("source_mtime") == raw_mtime and meta.get("count"):
-                return filtered_path, int(meta["count"])
-
-        count = 0
-        try:
-            with (
-                self._progress_bar(
-                    description=f"Filtering {language}",
-                ) as advance,
-                gzip.open(raw_dump, "rt", encoding="utf-8") as src,
-                filtered_path.open(
-                    "w",
-                    encoding="utf-8",
-                ) as dst,
-            ):
-                for line in src:
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        raise KaikkiParseError(None, exc) from exc
-
-                    advance(1)
-
-                    entry_language = entry.get("language") or entry.get("lang")
-                    if entry_language == language:
-                        dst.write(line if line.endswith("\n") else f"{line}\n")
-                        count += 1
-        except OSError as exc:
-            raise KaikkiDownloadError(
-                f"Failed to read Kaikki raw dump from {raw_dump}: {exc}",
-            ) from exc
-
-        if count == 0:
-            filtered_path.unlink(missing_ok=True)
-            raise KaikkiDownloadError(
-                f"No entries found for language '{language}' in Kaikki raw dump.",
-            )
-
-        meta_path.write_text(
-            json.dumps({"language": language, "count": count, "source_mtime": raw_mtime}),
-            encoding="utf-8",
-        )
-
-        return filtered_path, count
 
     def _kindle_lang_code(self, code: str | None, override: str | None = None) -> str:
         if override:
@@ -831,10 +620,10 @@ class Builder:
         include_pos: bool,  # noqa: ARG002
         try_fix_inflections: bool,
         max_entries: int,  # noqa: ARG002
+        language_file: Path,
+        entry_count: int,
         kindle_lang_override: str | None = None,
     ) -> int:
-        language_file, entry_count = self._ensure_filtered_language(in_lang)
-        language_file = self._ensure_translated_glosses(language_file, in_lang, out_lang)
         iso_in, _ = lang_meta(in_lang)
         iso_out, _ = lang_meta(out_lang)
         kindle_in = self._kindle_lang_code(iso_in)
@@ -1027,6 +816,7 @@ class Builder:
     ) -> dict[str, int]:
         primary = in_langs[0]
         counts = {}
+        primary_file, primary_count = self._prepare_combined_entries(primary, out_lang)
         counts[primary] = self._export_one(
             primary,
             out_lang,
@@ -1037,12 +827,15 @@ class Builder:
             include_pos,
             try_fix_inflections,
             max_entries,
+            primary_file,
+            primary_count,
             kindle_lang_override,
         )
 
         for extra in in_langs[1:]:
             extra_out = outdir / f"extra_{extra.replace(' ', '_')}"
             extra_out.mkdir(parents=True, exist_ok=True)
+            extra_file, extra_count = self._prepare_combined_entries(extra, out_lang)
             counts[extra] = self._export_one(
                 extra,
                 out_lang,
@@ -1053,6 +846,8 @@ class Builder:
                 include_pos,
                 try_fix_inflections,
                 max_entries,
+                extra_file,
+                extra_count,
                 kindle_lang_override,
             )
 

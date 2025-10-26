@@ -4,6 +4,7 @@ import gzip
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -13,6 +14,7 @@ from dictforge.builder import (
     KaikkiParseError,
     KindleBuildError,
 )
+from dictforge.sources import KaikkiSource
 
 
 @pytest.fixture
@@ -20,9 +22,14 @@ def builder(tmp_path: Path) -> Builder:
     return Builder(tmp_path, show_progress=False)
 
 
-def test_slugify_and_kaikki_slug(builder: Builder) -> None:
+@pytest.fixture
+def kaikki_source(builder: Builder) -> KaikkiSource:
+    return builder._sources[0]
+
+
+def test_slugify_and_kaikki_slug(builder: Builder, kaikki_source: KaikkiSource) -> None:
     assert builder._slugify("Serbo-Croatian!") == "Serbo_Croatian_"
-    assert builder._kaikki_slug("Serbo-Croatian") == "SerboCroatian"
+    assert kaikki_source._kaikki_slug("Serbo-Croatian") == "SerboCroatian"
 
 
 def test_ensure_download_creates_cache(builder: Builder) -> None:
@@ -30,17 +37,21 @@ def test_ensure_download_creates_cache(builder: Builder) -> None:
     assert builder.cache_dir.exists()
 
 
-def test_ensure_language_dataset_uses_cached_file(builder: Builder) -> None:
+def test_ensure_language_dataset_uses_cached_file(
+    builder: Builder, kaikki_source: KaikkiSource
+) -> None:
     lang_dir = builder.cache_dir / "languages"
     lang_dir.mkdir(parents=True, exist_ok=True)
     cached = lang_dir / "kaikki.org-dictionary-Serbian.jsonl"
     cached.write_text("{}", encoding="utf-8")
 
-    path = builder._ensure_language_dataset("Serbian")
+    path = kaikki_source.ensure_language_dataset("Serbian")
     assert path == cached
 
 
-def test_ensure_language_dataset_downloads_when_missing(builder: Builder, monkeypatch) -> None:
+def test_ensure_language_dataset_downloads_when_missing(
+    kaikki_source: KaikkiSource, monkeypatch
+) -> None:
     chunks = [b"line1", b"line2"]
 
     class DummyResponse:
@@ -51,17 +62,19 @@ def test_ensure_language_dataset_downloads_when_missing(builder: Builder, monkey
             yield from chunks
 
     monkeypatch.setattr(
-        builder.session,
+        kaikki_source.session,
         "get",
         lambda url, stream, timeout: DummyResponse(),
     )
 
-    path = builder._ensure_language_dataset("Serbian")
+    path = kaikki_source.ensure_language_dataset("Serbian")
     assert path.exists()
     assert path.read_bytes() == b"".join(chunks)
 
 
-def test_load_translation_map_reads_dump(builder: Builder, monkeypatch, tmp_path: Path) -> None:
+def test_load_translation_map_reads_dump(
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
+) -> None:
     dataset = tmp_path / "kaikki.org-dictionary-English.jsonl"
     dataset.write_text(
         "\n".join(
@@ -93,14 +106,14 @@ def test_load_translation_map_reads_dump(builder: Builder, monkeypatch, tmp_path
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(builder, "_ensure_language_dataset", lambda language: dataset)
+    monkeypatch.setattr(kaikki_source, "_ensure_language_dataset", lambda language: dataset)
 
-    mapping = builder._load_translation_map("English", "Serbian")
+    mapping = kaikki_source._load_translation_map("English", "Serbian")
     assert mapping == {"house": ["kuća", "дом"]}
-    assert builder._translation_cache[("english", "serbian")] is mapping
+    assert kaikki_source.translation_cache[("english", "serbian")] is mapping
 
 
-def test_apply_translation_glosses(builder: Builder) -> None:
+def test_apply_translation_glosses(kaikki_source: KaikkiSource) -> None:
     entry = {
         "senses": [
             {
@@ -118,7 +131,7 @@ def test_apply_translation_glosses(builder: Builder) -> None:
         "greeting": ["saludo"],
     }
 
-    builder._apply_translation_glosses(entry, translation_map)
+    kaikki_source._apply_translation_glosses(entry, translation_map)
 
     first, second = entry["senses"]
     assert first["glosses"] == ["hola"]
@@ -127,7 +140,7 @@ def test_apply_translation_glosses(builder: Builder) -> None:
 
 
 def test_ensure_translated_glosses_reuses_cache(
-    builder: Builder, monkeypatch, tmp_path: Path
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
 ) -> None:
     base_path = tmp_path / "Serbian-English.jsonl"
     base_path.write_text(
@@ -138,18 +151,18 @@ def test_ensure_translated_glosses_reuses_cache(
     localized_path = base_path.with_name(f"{base_path.stem}__to_ru.jsonl")
 
     monkeypatch.setattr(
-        builder,
+        kaikki_source,
         "_load_translation_map",
         lambda source, target: {"hello": ["здраво"]},
     )
 
-    localized = builder._ensure_translated_glosses(base_path, "Serbian", "Russian")
+    localized = kaikki_source._ensure_translated_glosses(base_path, "Serbian", "Russian")
     assert localized == localized_path
     content = localized.read_text(encoding="utf-8").strip()
     assert "здраво" in content
 
     localized.touch()
-    localized = builder._ensure_translated_glosses(base_path, "Serbian", "Russian")
+    localized = kaikki_source._ensure_translated_glosses(base_path, "Serbian", "Russian")
     assert localized == localized_path
 
 
@@ -161,8 +174,27 @@ def _create_raw_dump(path: Path, lines: list[str]) -> Path:
     return path
 
 
+class DummySource:
+    def __init__(self, base_dir: Path, name: str, entries: list[dict[str, Any]]):
+        self.base_dir = base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.base_dir / f"{name}.jsonl"
+        self.path.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+        self.entries = entries
+        self.ensure_calls = 0
+
+    def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+        self.ensure_calls += 1
+
+    def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: ARG002
+        return self.path, len(self.entries)
+
+
 def test_ensure_filtered_language_filters_and_caches(
-    builder: Builder, monkeypatch, tmp_path: Path
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
 ) -> None:
     raw_path = tmp_path / "raw" / "dump.jsonl.gz"
     _create_raw_dump(
@@ -173,38 +205,85 @@ def test_ensure_filtered_language_filters_and_caches(
         ],
     )
 
-    monkeypatch.setattr(builder, "_ensure_raw_dump", lambda: raw_path)
+    monkeypatch.setattr(kaikki_source, "_ensure_raw_dump", lambda: raw_path)
 
-    filtered_path, count = builder._ensure_filtered_language("Serbian")
+    filtered_path, count = kaikki_source._ensure_filtered_language("Serbian")
     assert count == 1
     entries = [json.loads(line) for line in filtered_path.read_text(encoding="utf-8").splitlines()]
     assert any(entry["word"] == "priča" for entry in entries)
 
-    cached_path, cached_count = builder._ensure_filtered_language("Serbian")
+    cached_path, cached_count = kaikki_source._ensure_filtered_language("Serbian")
     assert cached_path == filtered_path
     assert cached_count == 1
 
 
 def test_ensure_filtered_language_invalid_json(
-    builder: Builder, monkeypatch, tmp_path: Path
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
 ) -> None:
     raw_path = tmp_path / "raw" / "dump.jsonl.gz"
     _create_raw_dump(raw_path, ["{invalid}\n"])
-    monkeypatch.setattr(builder, "_ensure_raw_dump", lambda: raw_path)
+    monkeypatch.setattr(kaikki_source, "_ensure_raw_dump", lambda: raw_path)
 
     with pytest.raises(KaikkiParseError):
-        builder._ensure_filtered_language("Serbian")
+        kaikki_source._ensure_filtered_language("Serbian")
 
 
 def test_ensure_filtered_language_without_matches(
-    builder: Builder, monkeypatch, tmp_path: Path
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
 ) -> None:
     raw_path = tmp_path / "raw" / "dump.jsonl.gz"
     _create_raw_dump(raw_path, [json.dumps({"language": "English"}) + "\n"])
-    monkeypatch.setattr(builder, "_ensure_raw_dump", lambda: raw_path)
+    monkeypatch.setattr(kaikki_source, "_ensure_raw_dump", lambda: raw_path)
 
     with pytest.raises(KaikkiDownloadError):
-        builder._ensure_filtered_language("Serbian")
+        kaikki_source._ensure_filtered_language("Serbian")
+
+
+def test_prepare_combined_entries_merges_sources(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    source_dir = tmp_path / "sources"
+    entries_one = [
+        {
+            "word": "test",
+            "senses": [{"glosses": ["gloss"], "examples": [{"text": "one"}]}],
+        }
+    ]
+    entries_two = [
+        {
+            "word": "test",
+            "senses": [{"glosses": ["gloss"], "examples": [{"text": "two"}]}],
+        },
+        {"word": "second", "senses": []},
+    ]
+    source_one = DummySource(source_dir, "s1", entries_one)
+    source_two = DummySource(source_dir, "s2", entries_two)
+    builder = Builder(cache_dir, show_progress=False, sources=[source_one, source_two])
+
+    combined_path, count = builder._prepare_combined_entries("Serbian", "English")
+    assert count == 2
+    merged = [
+        json.loads(line)
+        for line in combined_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    merged_by_word = {entry["word"]: entry for entry in merged}
+    examples = merged_by_word["test"]["senses"][0]["examples"]
+    assert {"text": "one"} in examples
+    assert {"text": "two"} in examples
+    assert "second" in merged_by_word
+
+
+def test_ensure_download_delegates_to_sources(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    source_dir = tmp_path / "sources"
+    source_one = DummySource(source_dir, "s1", [{"word": "alpha"}])
+    source_two = DummySource(source_dir, "s2", [{"word": "beta"}])
+    builder = Builder(cache_dir, show_progress=False, sources=[source_one, source_two])
+
+    builder.ensure_download()
+
+    assert source_one.ensure_calls == 1
+    assert source_two.ensure_calls == 1
 
 
 def test_kindle_lang_code_variants(builder: Builder) -> None:
@@ -312,9 +391,6 @@ def test_export_one_success(builder: Builder, monkeypatch, tmp_path: Path) -> No
     lang_file = tmp_path / "l.jsonl"
     lang_file.write_text("{}\n", encoding="utf-8")
 
-    monkeypatch.setattr(builder, "_ensure_filtered_language", lambda lang: (lang_file, 2))
-    monkeypatch.setattr(builder, "_ensure_translated_glosses", lambda path, a, b: path)
-
     outdir = tmp_path / "out"
     outdir.mkdir()
     count = builder._export_one(
@@ -327,6 +403,8 @@ def test_export_one_success(builder: Builder, monkeypatch, tmp_path: Path) -> No
         True,
         True,
         0,
+        lang_file,
+        2,
         None,
     )
     assert count == 2
@@ -336,9 +414,6 @@ def test_export_one_fallback_runs_kindlegen(builder: Builder, monkeypatch, tmp_p
     monkeypatch.setattr("dictforge.builder.DictionaryCreator", DummyCreator)
     base_file = tmp_path / "base.jsonl"
     base_file.write_text("{}\n", encoding="utf-8")
-
-    monkeypatch.setattr(builder, "_ensure_filtered_language", lambda lang: (base_file, 1))
-    monkeypatch.setattr(builder, "_ensure_translated_glosses", lambda path, a, b: path)
 
     def fake_run(kindlegen_path: str, opf_path: Path) -> None:
         mobi_dir = opf_path.parent
@@ -359,6 +434,8 @@ def test_export_one_fallback_runs_kindlegen(builder: Builder, monkeypatch, tmp_p
         True,
         True,
         0,
+        base_file,
+        1,
         None,
     )
     assert count == 1
@@ -366,12 +443,31 @@ def test_export_one_fallback_runs_kindlegen(builder: Builder, monkeypatch, tmp_p
 
 
 def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_path: Path) -> None:
-    calls: list[tuple[str, str, Path]] = []
+    calls: list[tuple[str, str, Path, Path, int]] = []
 
-    def fake_export(language: str, out_lang: str, outdir: Path, *_args, **_kwargs) -> int:
-        calls.append((language, out_lang, outdir))
-        return 3 if "extra" not in str(outdir) else 1
+    def fake_prepare(language: str, out_lang: str) -> tuple[Path, int]:
+        data_path = tmp_path / f"{language}.jsonl"
+        data_path.write_text("{}\n", encoding="utf-8")
+        return (data_path, 3) if language == "Serbian" else (data_path, 1)
 
+    def fake_export(
+        language: str,
+        out_lang: str,
+        outdir: Path,
+        kindlegen_path: str,
+        title: str,
+        shortname: str,
+        include_pos: bool,
+        try_fix_inflections: bool,
+        max_entries: int,
+        language_file: Path,
+        entry_count: int,
+        kindle_lang_override: str | None = None,
+    ) -> int:
+        calls.append((language, out_lang, outdir, language_file, entry_count))
+        return entry_count
+
+    monkeypatch.setattr(builder, "_prepare_combined_entries", fake_prepare)
     monkeypatch.setattr(builder, "_export_one", fake_export)
 
     counts = builder.build_dictionary(
@@ -388,7 +484,9 @@ def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_p
 
     assert counts == {"Serbian": 3, "Croatian": 1}
     assert calls[0][0] == "Serbian"
+    assert calls[0][4] == 3
     assert calls[1][0] == "Croatian"
+    assert calls[1][4] == 1
 
 
 def test_kaikki_parse_error_extracts_excerpt(tmp_path: Path) -> None:
