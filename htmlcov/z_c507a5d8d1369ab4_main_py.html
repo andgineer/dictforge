@@ -62,10 +62,10 @@
         <p class="text">
             <a id="prevFileLink" class="nav" href="z_c507a5d8d1369ab4_langutil_py.html">&#xab; prev</a> &nbsp; &nbsp;
             <a id="indexLink" class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
-            <a id="nextFileLink" class="nav" href="z_c507a5d8d1369ab4_tatoeba_py.html">&#xbb; next</a>
+            <a id="nextFileLink" class="nav" href="z_c507a5d8d1369ab4_source_base_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.10.7">coverage.py v7.10.7</a>,
-            created at 2025-10-26 05:23 +0000
+            created at 2025-10-26 11:03 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -94,7 +94,7 @@
     <p class="pln"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">builder</span> <span class="key">import</span> <span class="nam">Builder</span><span class="op">,</span> <span class="nam">KaikkiDownloadError</span><span class="op">,</span> <span class="nam">KaikkiParseError</span><span class="op">,</span> <span class="nam">KindleBuildError</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t14" href="#t14">14</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">config</span> <span class="key">import</span> <span class="nam">config_path</span><span class="op">,</span> <span class="nam">load_config</span><span class="op">,</span> <span class="nam">save_config</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t15" href="#t15">15</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">kindle</span> <span class="key">import</span> <span class="nam">guess_kindlegen_path</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t15" href="#t15">15</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">kindlegen</span> <span class="key">import</span> <span class="nam">guess_kindlegen_path</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t16" href="#t16">16</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">langutil</span> <span class="key">import</span> <span class="nam">lang_meta</span><span class="op">,</span> <span class="nam">make_defaults</span><span class="op">,</span> <span class="nam">normalize_input_name</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t17" href="#t17">17</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t"><span class="com"># rich-click styling</span>&nbsp;</span><span class="r"></span></p>
@@ -226,7 +226,7 @@
     <p class="run"><span class="n"><a id="t144" href="#t144">144</a></span><span class="t">    <span class="nam">outdir_path</span> <span class="op">=</span> <span class="nam">Path</span><span class="op">(</span><span class="nam">outdir</span> <span class="key">or</span> <span class="nam">dfl</span><span class="op">[</span><span class="str">"outdir"</span><span class="op">]</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t145" href="#t145">145</a></span><span class="t">    <span class="nam">outdir_path</span><span class="op">.</span><span class="nam">mkdir</span><span class="op">(</span><span class="nam">parents</span><span class="op">=</span><span class="key">True</span><span class="op">,</span> <span class="nam">exist_ok</span><span class="op">=</span><span class="key">True</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t146" href="#t146">146</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">    <span class="nam">b</span> <span class="op">=</span> <span class="nam">Builder</span><span class="op">(</span><span class="nam">cache_dir</span><span class="op">=</span><span class="nam">cache_dir_val</span><span class="op">,</span> <span class="nam">show_progress</span><span class="op">=</span><span class="key">True</span><span class="op">,</span> <span class="nam">reset_cache</span><span class="op">=</span><span class="nam">reset_cache</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">    <span class="nam">b</span> <span class="op">=</span> <span class="nam">Builder</span><span class="op">(</span><span class="nam">cache_dir</span><span class="op">=</span><span class="nam">cache_dir_val</span><span class="op">,</span> <span class="nam">show_progress</span><span class="op">=</span><span class="key">True</span><span class="op">)</span>  <span class="com"># reset_cache=reset_cache</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t148" href="#t148">148</a></span><span class="t">    <span class="nam">b</span><span class="op">.</span><span class="nam">ensure_download</span><span class="op">(</span><span class="nam">force</span><span class="op">=</span><span class="key">False</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t149" href="#t149">149</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t150" href="#t150">150</a></span><span class="t">    <span class="nam">in_langs</span> <span class="op">=</span> <span class="op">[</span><span class="nam">in_lang_norm</span><span class="op">]</span> <span class="op">+</span> <span class="nam">merge_list</span>&nbsp;</span><span class="r"></span></p>
@@ -326,10 +326,10 @@
         <p>
             <a class="nav" href="z_c507a5d8d1369ab4_langutil_py.html">&#xab; prev</a> &nbsp; &nbsp;
             <a class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
-            <a class="nav" href="z_c507a5d8d1369ab4_tatoeba_py.html">&#xbb; next</a>
+            <a class="nav" href="z_c507a5d8d1369ab4_source_base_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.10.7">coverage.py v7.10.7</a>,
-            created at 2025-10-26 05:23 +0000
+            created at 2025-10-26 11:03 +0000
         </p>
     </div>
 </footer>
