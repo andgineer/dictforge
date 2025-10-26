@@ -29,9 +29,9 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
-from .source_base import DictionarySource
 
 from .langutil import lang_meta
+from .source_base import DictionarySource
 from .source_kaikki import KaikkiDownloadError, KaikkiParseError, KaikkiSource
 
 KINDLE_SUPPORTED_LANGS = {
@@ -186,6 +186,7 @@ class KindleBuildError(RuntimeError):
 
 
 def _format_units(task: Task, unit: str) -> str:
+    """Present rich-progress counts with human-friendly thousands separators."""
     completed = int(task.completed or 0)
     total = task.total
     label = unit if unit != "B" else "B"
@@ -195,6 +196,7 @@ def _format_units(task: Task, unit: str) -> str:
 
 
 class _BaseProgressCapture:
+    """Mirror stdout/stderr into a Rich task while collecting diagnostic text."""
     def __init__(
         self,
         *,
@@ -204,6 +206,7 @@ class _BaseProgressCapture:
         unit: str,
         total_hint: int | None = None,
     ) -> None:
+        """Capture console/progress configuration and reset buffered state."""
         self._console = console
         self._enabled = enabled
         self._description = description
@@ -217,10 +220,12 @@ class _BaseProgressCapture:
         self._warnings: list[str] = []
 
     def _format_description(self, text: str) -> str:
+        """Append unit information to ``text`` for nicer progress labels."""
         unit_hint = f" [{self._unit}]" if self._unit else ""
         return f"{text}{unit_hint}"
 
     def start(self) -> None:
+        """Create the Rich progress task if progress output is enabled."""
         if not self._enabled:
             return
         columns = [
@@ -245,6 +250,7 @@ class _BaseProgressCapture:
         )
 
     def stop(self) -> None:
+        """Flush buffered text and tear down the Rich progress context."""
         if self._buffer.strip():
             self.handle_line(self._buffer.strip())
         self._buffer = ""
@@ -253,6 +259,7 @@ class _BaseProgressCapture:
             self._progress = None
 
     def write(self, text: str) -> int:
+        """Buffer ``text`` and dispatch whole lines to :meth:`handle_line`."""
         self._captured.write(text)
         self._buffer += text
         while "\n" in self._buffer:
@@ -261,13 +268,16 @@ class _BaseProgressCapture:
         return len(text)
 
     def flush(self) -> None:  # pragma: no cover - interface requirement
+        """Satisfy the file-like interface expected by ``redirect_stdout``."""
         return None
 
     def handle_line(self, line: str) -> None:  # pragma: no cover - overridden
+        """Record non-empty ``line`` values as warnings for later inspection."""
         if line:
             self._warnings.append(line)
 
     def set_total(self, total: int) -> None:
+        """Switch the task into determinate mode when ``total`` becomes known."""
         if total < 0:
             return
         self._total_hint = total
@@ -275,6 +285,7 @@ class _BaseProgressCapture:
             self._progress.update(self._task_id, total=total)  # type: ignore
 
     def advance_to(self, value: int) -> None:
+        """Advance the completed counter monotonically to ``value``."""
         if value <= self._current:
             return
         self._current = value
@@ -282,6 +293,7 @@ class _BaseProgressCapture:
             self._progress.update(self._task_id, completed=value)  # type: ignore
 
     def set_description(self, description: str) -> None:
+        """Update the text displayed alongside the progress indicator."""
         self._description = description
         if self._progress is not None and self._task_id is not None:
             self._progress.update(
@@ -290,15 +302,18 @@ class _BaseProgressCapture:
             )
 
     def finish(self) -> None:
+        """Ensure the task reaches completion once the wrapped job ends."""
         if self._progress is not None and self._task_id is not None:
             completed = self._total_hint if self._total_hint is not None else self._current
             self._progress.update(self._task_id, completed=completed)  # type: ignore
 
     @property
     def warnings(self) -> list[str]:
+        """Warnings captured from the underlying tool's stdout/stderr."""
         return self._warnings
 
     def output(self) -> str:
+        """Return the raw captured output (including buffered partial lines)."""
         if self._buffer.strip():
             self.handle_line(self._buffer.strip())
             self._buffer = ""
@@ -306,6 +321,7 @@ class _BaseProgressCapture:
 
 
 class _DatabaseProgressCapture(_BaseProgressCapture):
+    """Interpret database build output to keep the progress bar in sync."""
     def __init__(self, *, console: Console, enabled: bool) -> None:
         super().__init__(
             console=console,
@@ -315,6 +331,7 @@ class _DatabaseProgressCapture(_BaseProgressCapture):
         )
 
     def handle_line(self, line: str) -> None:
+        """Translate sqlite import chatter into progress updates and messages."""
         if not line:
             return
         if line.endswith("inflections to add manually"):
@@ -333,6 +350,7 @@ class _DatabaseProgressCapture(_BaseProgressCapture):
 
 
 class _KindleProgressCapture(_BaseProgressCapture):
+    """Track kindlegen/Kindle Previewer output to surface friendly status."""
     def __init__(
         self,
         *,
@@ -351,6 +369,7 @@ class _KindleProgressCapture(_BaseProgressCapture):
         self.inflections: int | None = None
 
     def handle_line(self, line: str) -> None:  # noqa: C901,PLR0912
+        """Derive progress milestones from Kindle Previewer console output."""
         if not line:
             return
         if line == "Getting base forms":
@@ -399,10 +418,12 @@ class Builder:
         show_progress: bool | None = None,
         sources: Iterable[DictionarySource] | None = None,
     ):
+        """Configure cache location, HTTP session, and available dictionary sources."""
         self.cache_dir = cache_dir
         self.session = requests.Session()
         self._show_progress = sys.stderr.isatty() if show_progress is None else show_progress
         self._console = Console(stderr=True, force_terminal=self._show_progress)
+        self._sources: list[DictionarySource]
         if sources is None:
             default_source = KaikkiSource(
                 cache_dir=self.cache_dir,
@@ -421,6 +442,7 @@ class Builder:
         total: int | None = None,
         unit: str = "entries",
     ) -> Iterator[Callable[[int], None]]:
+        """Yield a callback that advances a Rich progress bar, or a noop when hidden."""
         if not self._show_progress:
 
             def noop(_: int) -> None:
@@ -459,6 +481,7 @@ class Builder:
             yield advance
 
     def _emit_creator_output(self, label: str, capture: _BaseProgressCapture) -> None:
+        """Dump captured stdout/stderr with a friendly heading when something goes wrong."""
         output = capture.output().strip()
         if not output:
             return
@@ -472,6 +495,7 @@ class Builder:
         entry_count: int,
         capture: _KindleProgressCapture,
     ) -> None:
+        """Print a post-build summary including base forms/inflection counts when available."""
         parts = [f"{entry_count:,} entries"]
         if capture.base_forms is not None:
             parts.append(f"{capture.base_forms:,} base forms")
@@ -484,13 +508,15 @@ class Builder:
         )
 
     def _prepare_combined_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: C901
+        """Aggregate entries from each configured source, merging senses/examples by word."""
         if len(self._sources) == 1:
             return self._sources[0].get_entries(in_lang, out_lang)
 
         combined_dir = self.cache_dir / "combined"
         combined_dir.mkdir(parents=True, exist_ok=True)
         source_tag = "_".join(type(src).__name__ for src in self._sources)
-        filename = f"{self._slugify(in_lang)}__{self._slugify(out_lang)}__{self._slugify(source_tag)}.jsonl"
+        source_tag_slug = self._slugify(source_tag)
+        filename = f"{self._slugify(in_lang)}__{self._slugify(out_lang)}__{source_tag_slug}.jsonl"
         combined_path = combined_dir / filename
 
         merged_entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -531,6 +557,7 @@ class Builder:
         return combined_path, len(merged_entries)
 
     def _merge_entry(self, target: dict[str, Any], incoming: dict[str, Any]) -> None:
+        """Combine senses/examples from ``incoming`` into ``target`` without duplicates."""
         target_senses = target.get("senses")
         incoming_senses = incoming.get("senses")
         if not isinstance(target_senses, list) or not isinstance(incoming_senses, list):
@@ -556,6 +583,7 @@ class Builder:
                 target_senses.append(copy.deepcopy(sense))
 
     def _merge_examples(self, target_sense: dict[str, Any], incoming_sense: dict[str, Any]) -> None:
+        """Append new example blocks from ``incoming_sense`` onto ``target_sense``."""
         incoming_examples = incoming_sense.get("examples")
         if not isinstance(incoming_examples, list) or not incoming_examples:
             return
@@ -571,15 +599,18 @@ class Builder:
                 target_examples.append(exemplar)
 
     def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+        """Delegate download preparation to each configured source."""
         # Placeholder for future caching/version pinning; ensure dir exists.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for source in self._sources:
             source.ensure_download(force=force)
 
     def _slugify(self, value: str) -> str:
+        """Return a filesystem-friendly slug used for cache file names."""
         return re.sub(r"[^A-Za-z0-9]+", "_", value.strip()) or "language"
 
     def _kindle_lang_code(self, code: str | None, override: str | None = None) -> str:
+        """Derive the Kindle language identifier, applying overrides/fallbacks."""
         if override:
             normalized_override = override.lower()
             if normalized_override in KINDLE_SUPPORTED_LANGS:
@@ -624,6 +655,7 @@ class Builder:
         entry_count: int,
         kindle_lang_override: str | None = None,
     ) -> int:
+        """Build and export a single dictionary volume from the prepared Kaikki file."""
         iso_in, _ = lang_meta(in_lang)
         iso_out, _ = lang_meta(out_lang)
         kindle_in = self._kindle_lang_code(iso_in)
@@ -712,6 +744,7 @@ class Builder:
         secondary_code: str,
         title: str,
     ) -> None:
+        """Patch the OPF metadata so Kindle recognises the dictionary languages."""
         print(
             (
                 f"[dictforge] Preparing OPF languages: source→'{primary_code}', "
@@ -785,6 +818,7 @@ class Builder:
         tree.write(opf_path, encoding="utf-8", xml_declaration=True)
 
     def _run_kindlegen(self, kindlegen_path: str, opf_path: Path) -> None:
+        """Invoke Kindle Previewer/kindlegen and surface helpful errors."""
         if not kindlegen_path:
             raise KindleBuildError("Kindle Previewer path is empty; cannot invoke kindlegen.")
 
@@ -814,6 +848,7 @@ class Builder:
         max_entries: int,
         kindle_lang_override: str | None = None,
     ) -> dict[str, int]:
+        """Build the primary dictionary and any merged extras, returning entry counts."""
         primary = in_langs[0]
         counts = {}
         primary_file, primary_count = self._prepare_combined_entries(primary, out_lang)

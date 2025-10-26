@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+
 from .langutil import lang_meta
 
 RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"
@@ -35,6 +36,7 @@ class KaikkiParseError(RuntimeError):
     """Raised when the Kaikki JSON dump cannot be parsed."""
 
     def __init__(self, path: str | Path | None, exc: JSONDecodeError):
+        """Capture location/context for JSON parsing failures emitted by Kaikki."""
         self.path = Path(path) if path else None
         location = f"line {exc.lineno}, column {exc.colno}" if exc.lineno else f"position {exc.pos}"
         path_hint = str(self.path) if self.path else "<unknown Kaikki file>"
@@ -52,11 +54,13 @@ class KaikkiParseError(RuntimeError):
             self.chunks: list[str] = []
 
         def handle_data(self, data: str) -> None:  # noqa: D401
+            """Collect plain-text chunks while stripping any HTML structure."""
             text = data.strip()
             if text:
                 self.chunks.append(text)
 
     def _load_excerpt(self, limit: int = 3) -> list[str]:
+        """Return the first few lines from the problematic Kaikki file for context."""
         if not self.path or not self.path.exists():
             return []
         try:
@@ -92,6 +96,7 @@ class KaikkiSource:
         session: requests.Session,
         progress_factory: ProgressFactory,
     ) -> None:
+        """Initialise a Kaikki source with shared cache/session/progress helpers."""
         self.cache_dir = cache_dir
         self.session = session
         self._progress_factory = progress_factory
@@ -99,26 +104,33 @@ class KaikkiSource:
 
     @property
     def translation_cache(self) -> dict[tuple[str, str], dict[str, list[str]]]:
+        """Expose the in-memory translation cache (primarily for tests)."""
         return self._translation_cache
 
     def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+        """Make sure the top-level cache directory hierarchy exists."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:
+        """Return cached (or freshly prepared) entries filtered for the request."""
         language_file, count = self._ensure_filtered_language(in_lang)
-        prepared = self._ensure_translated_glosses(language_file, in_lang, out_lang)
+        prepared = self._ensure_translated_glosses(language_file, out_lang)
         return prepared, count
 
     def ensure_language_dataset(self, language: str) -> Path:
+        """External helper used by tests to warm the per-language Kaikki dump."""
         return self._ensure_language_dataset(language)
 
     def _slugify(self, value: str) -> str:
+        """Collapse a language name to a Kaikki/filename friendly slug."""
         return value.replace(" ", "").replace("-", "").replace("'", "")
 
     def _kaikki_slug(self, language: str) -> str:
+        """Mirror Kaikki's slug formatting (spaces/dashes removed)."""
         return self._slugify(language)
 
     def _ensure_language_dataset(self, language: str) -> Path:
+        """Download (or reuse) the Kaikki JSONL dump dedicated to ``language``."""
         lang_dir = self.cache_dir / LANGUAGE_CACHE_DIR
         lang_dir.mkdir(parents=True, exist_ok=True)
         slug = self._kaikki_slug(language)
@@ -160,6 +172,7 @@ class KaikkiSource:
         return target
 
     def _ensure_raw_dump(self) -> Path:
+        """Retrieve the monolithic Kaikki dump used for per-language filtering."""
         raw_dir = self.cache_dir / RAW_CACHE_DIR
         raw_dir.mkdir(parents=True, exist_ok=True)
         target = raw_dir / Path(RAW_DUMP_URL).name
@@ -198,6 +211,7 @@ class KaikkiSource:
         return target
 
     def _ensure_filtered_language(self, language: str) -> tuple[Path, int]:
+        """Filter the raw dump down to entries matching ``language`` and cache metadata."""
         raw_dump = self._ensure_raw_dump()
 
         filtered_dir = self.cache_dir / FILTERED_CACHE_DIR
@@ -261,6 +275,7 @@ class KaikkiSource:
         return filtered_path, count
 
     def _load_translation_map(self, source_lang: str, target_lang: str) -> dict[str, list[str]]:
+        """Build or reuse a map from source words to translations in ``target_lang``."""
         key = (source_lang.lower(), target_lang.lower())
         cached = self._translation_cache.get(key)
         if cached is not None:
@@ -312,6 +327,7 @@ class KaikkiSource:
         entry: dict[str, Any],
         translation_map: dict[str, list[str]],
     ) -> None:
+        """Mutate ``entry`` so glosses prefer translated variants when available."""
         senses = entry.get("senses") or []
         for sense in senses:
             translations: set[str] = set()
@@ -340,9 +356,9 @@ class KaikkiSource:
     def _ensure_translated_glosses(
         self,
         base_path: Path,
-        in_lang: str,
         out_lang: str,
     ) -> Path:
+        """Re-write glosses for ``out_lang`` via English translations (the only Kaikki pivot)."""
         out_code, _ = lang_meta(out_lang)
         if out_code == "en":
             return base_path

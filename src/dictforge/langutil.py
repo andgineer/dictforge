@@ -35,6 +35,7 @@ LANG_MAP = {
 
 
 def normalize_input_name(name: str) -> str:
+    """Collapse user input aliases to canonical Kaikki language names."""
     if not name:
         return name
     key = re.sub(r"\s+", " ", name.strip().lower())
@@ -42,11 +43,13 @@ def normalize_input_name(name: str) -> str:
 
 
 def lang_meta(kaikki_name: str) -> tuple[str, str]:
+    """Return ISO code and human-readable name for a Kaikki language label."""
     iso2, native = LANG_MAP.get(kaikki_name, (kaikki_name.lower()[:2], kaikki_name))
     return iso2, native
 
 
 def make_defaults(in_lang_kaikki: str, out_lang_kaikki: str) -> dict[str, str]:
+    """Generate default metadata (title, codes, output dir) for CLI invocations."""
     in_code, in_native = lang_meta(in_lang_kaikki)
     out_code, out_native = lang_meta(out_lang_kaikki)
     today = datetime.utcnow().strftime("%Y%m%d")

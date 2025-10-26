@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 def guess_kindlegen_path() -> str:
+    """Best-effort discovery of Kindle Previewer's bundled kindlegen executable."""
     # Kindle Previewer 3 bundles kindlegen internally
     system = platform.system()
     candidates = []

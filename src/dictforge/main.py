@@ -144,7 +144,8 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
     outdir_path = Path(outdir or dfl["outdir"])
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    b = Builder(cache_dir=cache_dir_val, show_progress=True)  # reset_cache=reset_cache
+    _ = reset_cache  # unused CLI flag (legacy compatibility)
+    b = Builder(cache_dir=cache_dir_val, show_progress=True)
     b.ensure_download(force=False)
 
     in_langs = [in_lang_norm] + merge_list

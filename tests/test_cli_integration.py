@@ -14,7 +14,9 @@ from dictforge.main import cli
 class RecordingCreator:
     instances: list["RecordingCreator"] = []
 
-    def __init__(self, source_language: str, target_language: str, *, kaikki_file_path: str) -> None:
+    def __init__(
+        self, source_language: str, target_language: str, *, kaikki_file_path: str
+    ) -> None:
         self.source_language = source_language
         self.target_language = target_language
         self.kaikki_file_path = Path(kaikki_file_path)

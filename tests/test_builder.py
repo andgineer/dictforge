@@ -156,13 +156,13 @@ def test_ensure_translated_glosses_reuses_cache(
         lambda source, target: {"hello": ["здраво"]},
     )
 
-    localized = kaikki_source._ensure_translated_glosses(base_path, "Serbian", "Russian")
+    localized = kaikki_source._ensure_translated_glosses(base_path, "Russian")
     assert localized == localized_path
     content = localized.read_text(encoding="utf-8").strip()
     assert "здраво" in content
 
     localized.touch()
-    localized = kaikki_source._ensure_translated_glosses(base_path, "Serbian", "Russian")
+    localized = kaikki_source._ensure_translated_glosses(base_path, "Russian")
     assert localized == localized_path
 
 

@@ -19,15 +19,18 @@ DEFAULTS = {
 
 
 def config_dir() -> Path:
+    """Return the per-user configuration directory for DictForge settings."""
     cfg_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return cfg_home / "wikidict-kindle"
 
 
 def config_path() -> Path:
+    """Return the full filesystem path to the DictForge TOML config file."""
     return config_dir() / "config.toml"
 
 
 def load_config() -> dict[str, Any]:
+    """Load configuration values, overlaying user overrides on top of defaults."""
     path = config_path()
     if path.exists():
         with path.open("rb") as f:
@@ -39,6 +42,7 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(data: dict[str, Any]) -> None:
+    """Persist configuration values to TOML without relying on extra deps."""
     # minimal TOML writer (no extra deps for writing)
     dir_ = config_dir()
     dir_.mkdir(parents=True, exist_ok=True)
