@@ -14,7 +14,7 @@ from dictforge.builder import (
     KaikkiParseError,
     KindleBuildError,
 )
-from dictforge.sources import KaikkiSource
+from dictforge.source_kaikki import KaikkiSource
 
 
 @pytest.fixture
