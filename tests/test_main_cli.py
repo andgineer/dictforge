@@ -59,9 +59,16 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
     calls: dict[str, object] = {}
 
     class DummyBuilder:
-        def __init__(self, cache_dir: Path, *, show_progress: bool | None = None) -> None:
+        def __init__(
+            self,
+            cache_dir: Path,
+            *,
+            show_progress: bool | None = None,
+            reset_cache: bool = False,
+        ) -> None:
             calls["cache_dir"] = cache_dir
             calls["show_progress"] = show_progress
+            calls["reset_cache"] = reset_cache
 
         def ensure_download(self, force: bool = False) -> None:
             calls["ensure_download"] = force
@@ -103,10 +110,15 @@ def test_cli_download_error(monkeypatch, runner: CliRunner, tmp_path: Path) -> N
 
     class FailingBuilder:
         def __init__(
-            self, cache_dir: Path, *, show_progress: bool | None = None
+            self,
+            cache_dir: Path,
+            *,
+            show_progress: bool | None = None,
+            reset_cache: bool = False,
         ) -> None:  # pragma: no cover - trivial
             self.cache_dir = cache_dir
             self.show_progress = show_progress
+            self.reset_cache = reset_cache
 
         def ensure_download(self, force: bool = False) -> None:  # pragma: no cover
             return
