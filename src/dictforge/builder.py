@@ -197,6 +197,7 @@ def _format_units(task: Task, unit: str) -> str:
 
 class _BaseProgressCapture:
     """Mirror stdout/stderr into a Rich task while collecting diagnostic text."""
+
     def __init__(
         self,
         *,
@@ -269,7 +270,7 @@ class _BaseProgressCapture:
 
     def flush(self) -> None:  # pragma: no cover - interface requirement
         """Satisfy the file-like interface expected by ``redirect_stdout``."""
-        return None
+        return
 
     def handle_line(self, line: str) -> None:  # pragma: no cover - overridden
         """Record non-empty ``line`` values as warnings for later inspection."""
@@ -322,6 +323,7 @@ class _BaseProgressCapture:
 
 class _DatabaseProgressCapture(_BaseProgressCapture):
     """Interpret database build output to keep the progress bar in sync."""
+
     def __init__(self, *, console: Console, enabled: bool) -> None:
         super().__init__(
             console=console,
@@ -351,6 +353,7 @@ class _DatabaseProgressCapture(_BaseProgressCapture):
 
 class _KindleProgressCapture(_BaseProgressCapture):
     """Track kindlegen/Kindle Previewer output to surface friendly status."""
+
     def __init__(
         self,
         *,
