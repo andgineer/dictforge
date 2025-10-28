@@ -13,6 +13,7 @@ from urllib.parse import quote
 import requests
 
 from .langutil import lang_meta
+from .source_base import entry_has_content
 
 RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"
 RAW_CACHE_DIR = "raw"
@@ -101,6 +102,7 @@ class KaikkiSource:
         self.session = session
         self._progress_factory = progress_factory
         self._translation_cache: dict[tuple[str, str], dict[str, list[str]]] = {}
+        self._filter_stats: dict[str, dict[str, int]] = {}
 
     @property
     def translation_cache(self) -> dict[tuple[str, str], dict[str, list[str]]]:
@@ -210,7 +212,7 @@ class KaikkiSource:
 
         return target
 
-    def _ensure_filtered_language(self, language: str) -> tuple[Path, int]:
+    def _ensure_filtered_language(self, language: str) -> tuple[Path, int]:  # noqa: C901
         """Filter the raw dump down to entries matching ``language`` and cache metadata."""
         raw_dump = self._ensure_raw_dump()
 
@@ -227,10 +229,14 @@ class KaikkiSource:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 meta = {}
-            if meta.get("source_mtime") == raw_mtime and meta.get("count"):
+            has_stats = "matched_entries" in meta and "skipped_empty" in meta
+            if meta.get("source_mtime") == raw_mtime and "count" in meta and has_stats:
+                self._store_filter_stats(language, meta)
                 return filtered_path, int(meta["count"])
 
-        count = 0
+        kept = 0
+        skipped_empty = 0
+        matched = 0
         try:
             with (
                 self._progress_factory(
@@ -254,25 +260,61 @@ class KaikkiSource:
 
                     entry_language = entry.get("language") or entry.get("lang")
                     if entry_language == language:
-                        dst.write(line if line.endswith("\n") else f"{line}\n")
-                        count += 1
+                        matched += 1
+                        if entry_has_content(entry):
+                            dst.write(line if line.endswith("\n") else f"{line}\n")
+                            kept += 1
+                        else:
+                            skipped_empty += 1
         except OSError as exc:
             raise KaikkiDownloadError(
                 f"Failed to read Kaikki raw dump from {raw_dump}: {exc}",
             ) from exc
 
-        if count == 0:
+        if kept == 0:
             filtered_path.unlink(missing_ok=True)
             raise KaikkiDownloadError(
                 f"No entries found for language '{language}' in Kaikki raw dump.",
             )
 
+        meta = {
+            "language": language,
+            "count": kept,
+            "matched_entries": matched,
+            "skipped_empty": skipped_empty,
+            "source_mtime": raw_mtime,
+        }
         meta_path.write_text(
-            json.dumps({"language": language, "count": count, "source_mtime": raw_mtime}),
+            json.dumps(meta, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",
         )
+        self._store_filter_stats(language, meta)
 
-        return filtered_path, count
+        return filtered_path, kept
+
+    def _store_filter_stats(self, language: str, meta: dict[str, Any]) -> None:
+        stats = {
+            key: int(meta[key])
+            for key in ("count", "matched_entries", "skipped_empty")
+            if key in meta and isinstance(meta[key], (int, float))
+        }
+        self._filter_stats[language] = stats
+
+    def get_filter_stats(self, language: str) -> dict[str, int] | None:
+        """Return cached filtering statistics for ``language`` when available."""
+        stats = self._filter_stats.get(language)
+        if stats:
+            return stats
+
+        meta_path = self.cache_dir / FILTERED_CACHE_DIR / f"{self._slugify(language)}{META_SUFFIX}"
+        if not meta_path.exists():
+            return None
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        self._store_filter_stats(language, meta)
+        return self._filter_stats.get(language)
 
     def _load_translation_map(self, source_lang: str, target_lang: str) -> dict[str, list[str]]:
         """Build or reuse a map from source words to translations in ``target_lang``."""

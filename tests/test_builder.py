@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import io
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,9 @@ from dictforge.builder import (
     KaikkiParseError,
     KindleBuildError,
 )
-from dictforge.source_kaikki import KaikkiSource
+from dictforge.source_base import entry_has_content
+from dictforge.source_kaikki import KaikkiSource, META_SUFFIX
+from rich.console import Console
 
 
 @pytest.fixture
@@ -25,6 +28,21 @@ def builder(tmp_path: Path) -> Builder:
 @pytest.fixture
 def kaikki_source(builder: Builder) -> KaikkiSource:
     return builder._sources[0]
+
+
+def test_entry_has_content_with_gloss() -> None:
+    entry = {"senses": [{"glosses": [" meaning "]}]}
+    assert entry_has_content(entry)
+
+
+def test_entry_has_content_with_raw_gloss() -> None:
+    entry = {"senses": [{"raw_glosses": ["пример"]}]}
+    assert entry_has_content(entry)
+
+
+def test_entry_has_content_rejects_empty() -> None:
+    entry = {"senses": [{"glosses": ["   "], "raw_glosses": [""]}]}
+    assert not entry_has_content(entry)
 
 
 def test_slugify_and_kaikki_slug(builder: Builder, kaikki_source: KaikkiSource) -> None:
@@ -200,8 +218,30 @@ def test_ensure_filtered_language_filters_and_caches(
     _create_raw_dump(
         raw_path,
         [
-            json.dumps({"language": "Serbian", "word": "priča"}) + "\n",
-            json.dumps({"language": "English", "word": "story"}) + "\n",
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "priča",
+                    "senses": [{"glosses": ["story"]}],
+                },
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "prazan",
+                    "senses": [{"glosses": ["  "], "raw_glosses": [""]}],
+                },
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "language": "English",
+                    "word": "story",
+                    "senses": [{"glosses": ["tale"]}],
+                },
+            )
+            + "\n",
         ],
     )
 
@@ -210,11 +250,55 @@ def test_ensure_filtered_language_filters_and_caches(
     filtered_path, count = kaikki_source._ensure_filtered_language("Serbian")
     assert count == 1
     entries = [json.loads(line) for line in filtered_path.read_text(encoding="utf-8").splitlines()]
-    assert any(entry["word"] == "priča" for entry in entries)
+    assert {entry["word"] for entry in entries} == {"priča"}
+
+    meta_path = filtered_path.parent / f"{filtered_path.stem}{META_SUFFIX}"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["count"] == 1
+    assert meta["matched_entries"] == 2
+    assert meta["skipped_empty"] == 1
 
     cached_path, cached_count = kaikki_source._ensure_filtered_language("Serbian")
     assert cached_path == filtered_path
     assert cached_count == 1
+
+
+def test_get_filter_stats_returns_meta(
+    kaikki_source: KaikkiSource, monkeypatch, tmp_path: Path
+) -> None:
+    raw_path = tmp_path / "raw" / "dump.jsonl.gz"
+    _create_raw_dump(
+        raw_path,
+        [
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "priča",
+                    "senses": [{"glosses": ["story"]}],
+                },
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "prazan",
+                    "senses": [{"glosses": ["  "], "raw_glosses": [""]}],
+                },
+            )
+            + "\n",
+        ],
+    )
+
+    monkeypatch.setattr(kaikki_source, "_ensure_raw_dump", lambda: raw_path)
+
+    kaikki_source._ensure_filtered_language("Serbian")
+
+    stats = kaikki_source.get_filter_stats("Serbian")
+    assert stats == {"count": 1, "matched_entries": 2, "skipped_empty": 1}
+
+    kaikki_source._filter_stats.clear()
+    stats_from_disk = kaikki_source.get_filter_stats("Serbian")
+    assert stats_from_disk == {"count": 1, "matched_entries": 2, "skipped_empty": 1}
 
 
 def test_ensure_filtered_language_invalid_json(
@@ -260,7 +344,7 @@ def test_prepare_combined_entries_merges_sources(tmp_path: Path) -> None:
     builder = Builder(cache_dir, show_progress=False, sources=[source_one, source_two])
 
     combined_path, count = builder._prepare_combined_entries("Serbian", "English")
-    assert count == 2
+    assert count == 1
     merged = [
         json.loads(line)
         for line in combined_path.read_text(encoding="utf-8").splitlines()
@@ -270,7 +354,44 @@ def test_prepare_combined_entries_merges_sources(tmp_path: Path) -> None:
     examples = merged_by_word["test"]["senses"][0]["examples"]
     assert {"text": "one"} in examples
     assert {"text": "two"} in examples
-    assert "second" in merged_by_word
+    assert "second" not in merged_by_word
+
+
+def test_builder_logs_skipped_entries(tmp_path: Path, monkeypatch) -> None:
+    cache_dir = tmp_path / "cache"
+    builder = Builder(cache_dir, show_progress=False)
+    kaikki_source = builder._sources[0]
+    raw_path = tmp_path / "raw" / "dump.jsonl.gz"
+    _create_raw_dump(
+        raw_path,
+        [
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "priča",
+                    "senses": [{"glosses": ["story"]}],
+                },
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "language": "Serbian",
+                    "word": "prazan",
+                    "senses": [{"glosses": ["  "], "raw_glosses": [""]}],
+                },
+            )
+            + "\n",
+        ],
+    )
+    monkeypatch.setattr(kaikki_source, "_ensure_raw_dump", lambda: raw_path)
+
+    buffer = io.StringIO()
+    builder._console = Console(file=buffer, force_terminal=False, color_system=None)
+
+    builder._prepare_combined_entries("Serbian", "English")
+
+    output = buffer.getvalue()
+    assert "skipped 1 empty" in output
 
 
 def test_ensure_download_delegates_to_sources(tmp_path: Path) -> None:
