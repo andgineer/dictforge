@@ -15,7 +15,7 @@ from dictforge.builder import (
     KaikkiParseError,
     KindleBuildError,
 )
-from dictforge.source_base import entry_has_content
+from dictforge.source_base import DictionarySource
 from dictforge.source_kaikki import KaikkiSource, META_SUFFIX
 from rich.console import Console
 
@@ -32,17 +32,17 @@ def kaikki_source(builder: Builder) -> KaikkiSource:
 
 def test_entry_has_content_with_gloss() -> None:
     entry = {"senses": [{"glosses": [" meaning "]}]}
-    assert entry_has_content(entry)
+    assert DictionarySource.entry_has_content(entry)
 
 
 def test_entry_has_content_with_raw_gloss() -> None:
     entry = {"senses": [{"raw_glosses": ["пример"]}]}
-    assert entry_has_content(entry)
+    assert DictionarySource.entry_has_content(entry)
 
 
 def test_entry_has_content_rejects_empty() -> None:
     entry = {"senses": [{"glosses": ["   "], "raw_glosses": [""]}]}
-    assert not entry_has_content(entry)
+    assert not DictionarySource.entry_has_content(entry)
 
 
 def test_slugify_and_kaikki_slug(builder: Builder, kaikki_source: KaikkiSource) -> None:
@@ -51,7 +51,7 @@ def test_slugify_and_kaikki_slug(builder: Builder, kaikki_source: KaikkiSource) 
 
 
 def test_ensure_download_creates_cache(builder: Builder) -> None:
-    builder.ensure_download()
+    builder.ensure_download_dirs()
     assert builder.cache_dir.exists()
 
 
@@ -192,8 +192,9 @@ def _create_raw_dump(path: Path, lines: list[str]) -> Path:
     return path
 
 
-class DummySource:
+class DummySource(DictionarySource):
     def __init__(self, base_dir: Path, name: str, entries: list[dict[str, Any]]):
+        super().__init__()
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.base_dir / f"{name}.jsonl"
@@ -204,7 +205,7 @@ class DummySource:
         self.entries = entries
         self.ensure_calls = 0
 
-    def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+    def ensure_download_dirs(self, force: bool = False) -> None:  # noqa: ARG002
         self.ensure_calls += 1
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: ARG002
@@ -401,7 +402,7 @@ def test_ensure_download_delegates_to_sources(tmp_path: Path) -> None:
     source_two = DummySource(source_dir, "s2", [{"word": "beta"}])
     builder = Builder(cache_dir, show_progress=False, sources=[source_one, source_two])
 
-    builder.ensure_download()
+    builder.ensure_download_dirs()
 
     assert source_one.ensure_calls == 1
     assert source_two.ensure_calls == 1

@@ -31,7 +31,7 @@ from rich.progress import (
 )
 
 from .langutil import lang_meta
-from .source_base import DictionarySource, entry_has_content
+from .source_base import DictionarySource
 from .source_kaikki import KaikkiDownloadError, KaikkiParseError, KaikkiSource
 
 KINDLE_SUPPORTED_LANGS = {
@@ -436,7 +436,6 @@ class Builder:
             self._sources = [default_source]
         else:
             self._sources = list(sources)
-        self._logged_source_stats: set[tuple[int, str]] = set()
 
     @contextmanager
     def _progress_bar(
@@ -516,7 +515,7 @@ class Builder:
         if len(self._sources) == 1:
             source = self._sources[0]
             result = source.get_entries(in_lang, out_lang)
-            self._log_source_stats(source, in_lang)
+            source.log_filter_stats(in_lang, self._console)
             return result
 
         combined_dir = self.cache_dir / "combined"
@@ -529,7 +528,7 @@ class Builder:
         merged_entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
         for source in self._sources:
             data_path, _ = source.get_entries(in_lang, out_lang)
-            self._log_source_stats(source, in_lang)
+            source.log_filter_stats(in_lang, self._console)
             try:
                 with data_path.open("r", encoding="utf-8") as fh:
                     for line in fh:
@@ -540,7 +539,7 @@ class Builder:
                             entry = json.loads(payload)
                         except json.JSONDecodeError as exc:
                             raise KaikkiParseError(data_path, exc) from exc
-                        if not entry_has_content(entry):
+                        if not source.entry_has_content(entry):
                             continue
                         word = entry.get("word")
                         if not isinstance(word, str):
@@ -565,29 +564,6 @@ class Builder:
                 dst.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         return combined_path, len(merged_entries)
-
-    def _log_source_stats(self, source: DictionarySource, language: str) -> None:
-        """Print a one-time summary of filtered entries for ``language``."""
-        key = (id(source), language.lower())
-        if key in self._logged_source_stats:
-            return
-        stats_getter = getattr(source, "get_filter_stats", None)
-        if not callable(stats_getter):
-            return
-        stats = stats_getter(language)
-        if not stats:
-            return
-        count = stats.get("count")
-        if count is None:
-            return
-        matched = stats.get("matched_entries", count)
-        skipped = stats.get("skipped_empty")
-        skipped_label = f", skipped {skipped:,} empty" if skipped is not None else ""
-        self._console.print(
-            (f"[dictforge] {language}: kept {count:,} of {matched:,} entries{skipped_label}"),
-            style="cyan",
-        )
-        self._logged_source_stats.add(key)
 
     def _merge_entry(self, target: dict[str, Any], incoming: dict[str, Any]) -> None:
         """Combine senses/examples from ``incoming`` into ``target`` without duplicates."""
@@ -631,12 +607,12 @@ class Builder:
             if exemplar not in target_examples:
                 target_examples.append(exemplar)
 
-    def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+    def ensure_download_dirs(self, force: bool = False) -> None:  # noqa: ARG002
         """Delegate download preparation to each configured source."""
         # Placeholder for future caching/version pinning; ensure dir exists.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for source in self._sources:
-            source.ensure_download(force=force)
+            source.ensure_download_dirs(force=force)
 
     def _slugify(self, value: str) -> str:
         """Return a filesystem-friendly slug used for cache file names."""

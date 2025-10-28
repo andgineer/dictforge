@@ -70,8 +70,8 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
             calls["show_progress"] = show_progress
             calls["reset_cache"] = reset_cache
 
-        def ensure_download(self, force: bool = False) -> None:
-            calls["ensure_download"] = force
+        def ensure_download_dirs(self, force: bool = False) -> None:
+            calls["ensure_download_dirs"] = force
 
         def build_dictionary(self, **kwargs):  # type: ignore[no-untyped-def]
             calls["build_kwargs"] = kwargs
@@ -86,7 +86,7 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
     assert "extra Croatian" in result.output
 
     assert isinstance(calls["cache_dir"], Path)
-    assert calls["ensure_download"] is False
+    assert calls["ensure_download_dirs"] is False
     build_kwargs = calls["build_kwargs"]
     assert build_kwargs["in_langs"] == ["Serbo-Croatian", "Croatian"]
     assert build_kwargs["title"] == "Title"
@@ -120,7 +120,7 @@ def test_cli_download_error(monkeypatch, runner: CliRunner, tmp_path: Path) -> N
             self.show_progress = show_progress
             self.reset_cache = reset_cache
 
-        def ensure_download(self, force: bool = False) -> None:  # pragma: no cover
+        def ensure_download_dirs(self, force: bool = False) -> None:  # pragma: no cover
             return
 
         def build_dictionary(self, **_: object) -> None:

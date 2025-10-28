@@ -13,7 +13,7 @@ from urllib.parse import quote
 import requests
 
 from .langutil import lang_meta
-from .source_base import entry_has_content
+from .source_base import DictionarySource
 
 RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"
 RAW_CACHE_DIR = "raw"
@@ -87,7 +87,7 @@ class KaikkiParseError(RuntimeError):
         ]
 
 
-class KaikkiSource:
+class KaikkiSource(DictionarySource):
     """Access and prepare Kaikki (Wiktextract) datasets."""
 
     def __init__(
@@ -98,23 +98,23 @@ class KaikkiSource:
         progress_factory: ProgressFactory,
     ) -> None:
         """Initialise a Kaikki source with shared cache/session/progress helpers."""
+        super().__init__()
         self.cache_dir = cache_dir
         self.session = session
         self._progress_factory = progress_factory
         self._translation_cache: dict[tuple[str, str], dict[str, list[str]]] = {}
-        self._filter_stats: dict[str, dict[str, int]] = {}
 
     @property
     def translation_cache(self) -> dict[tuple[str, str], dict[str, list[str]]]:
         """Expose the in-memory translation cache (primarily for tests)."""
         return self._translation_cache
 
-    def ensure_download(self, force: bool = False) -> None:  # noqa: ARG002
+    def ensure_download_dirs(self, force: bool = False) -> None:  # noqa: ARG002
         """Make sure the top-level cache directory hierarchy exists."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:
-        """Return cached (or freshly prepared) entries filtered for the request."""
+        """Entries filtered for the language pair."""
         language_file, count = self._ensure_filtered_language(in_lang)
         prepared = self._ensure_translated_glosses(language_file, out_lang)
         return prepared, count
@@ -231,7 +231,7 @@ class KaikkiSource:
                 meta = {}
             has_stats = "matched_entries" in meta and "skipped_empty" in meta
             if meta.get("source_mtime") == raw_mtime and "count" in meta and has_stats:
-                self._store_filter_stats(language, meta)
+                self.record_filter_stats(language, meta)
                 return filtered_path, int(meta["count"])
 
         kept = 0
@@ -261,7 +261,7 @@ class KaikkiSource:
                     entry_language = entry.get("language") or entry.get("lang")
                     if entry_language == language:
                         matched += 1
-                        if entry_has_content(entry):
+                        if self.entry_has_content(entry):
                             dst.write(line if line.endswith("\n") else f"{line}\n")
                             kept += 1
                         else:
@@ -288,21 +288,13 @@ class KaikkiSource:
             json.dumps(meta, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",
         )
-        self._store_filter_stats(language, meta)
+        self.record_filter_stats(language, meta)
 
         return filtered_path, kept
 
-    def _store_filter_stats(self, language: str, meta: dict[str, Any]) -> None:
-        stats = {
-            key: int(meta[key])
-            for key in ("count", "matched_entries", "skipped_empty")
-            if key in meta and isinstance(meta[key], (int, float))
-        }
-        self._filter_stats[language] = stats
-
     def get_filter_stats(self, language: str) -> dict[str, int] | None:
         """Return cached filtering statistics for ``language`` when available."""
-        stats = self._filter_stats.get(language)
+        stats = super().get_filter_stats(language)
         if stats:
             return stats
 
@@ -313,8 +305,8 @@ class KaikkiSource:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return None
-        self._store_filter_stats(language, meta)
-        return self._filter_stats.get(language)
+        self.record_filter_stats(language, meta)
+        return super().get_filter_stats(language)
 
     def _load_translation_map(self, source_lang: str, target_lang: str) -> dict[str, list[str]]:
         """Build or reuse a map from source words to translations in ``target_lang``."""

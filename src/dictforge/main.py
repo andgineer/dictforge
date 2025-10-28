@@ -146,7 +146,7 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
 
     _ = reset_cache  # unused CLI flag (legacy compatibility)
     b = Builder(cache_dir=cache_dir_val, show_progress=True)
-    b.ensure_download(force=False)
+    b.ensure_download_dirs(force=False)
 
     in_langs = [in_lang_norm] + merge_list
     start_label = ", ".join(in_langs)
