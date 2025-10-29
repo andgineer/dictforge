@@ -7,7 +7,7 @@ from contextlib import AbstractContextManager
 from html.parser import HTMLParser
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import quote
 
 import requests
@@ -27,6 +27,33 @@ ELLIPSE = "..."
 
 ProgressAdvance = Callable[[int], None]
 ProgressFactory = Callable[..., AbstractContextManager[ProgressAdvance]]
+
+
+GlossText = list[str] | str
+
+
+class KaikkiSense(TypedDict, total=False):
+    """Definition text that explains what the word means in plain language.
+
+    ``glosses`` contains the polished strings shown to the user, for example
+    ``"greeting"`` or ``"domestic cat"``.  ``raw_glosses`` keeps the same
+    definitions before any clean-up, so we still accept entries that only have a
+    rough version (e.g. with markup or punctuation fragments).
+    """
+
+    glosses: GlossText
+    raw_glosses: GlossText
+
+
+class KaikkiEntry(TypedDict, total=False):
+    """Dictionary entry that groups all sense definitions for a single headword.
+
+    ``senses`` is the ordered list of meanings (each a ``KaikkiSense``).
+    ``word`` stores the lemma being defined.
+    """
+
+    word: str
+    senses: list[KaikkiSense]
 
 
 class KaikkiDownloadError(RuntimeError):
@@ -112,6 +139,29 @@ class KaikkiSource(DictionarySource):
     def ensure_download_dirs(self, force: bool = False) -> None:  # noqa: ARG002
         """Make sure the top-level cache directory hierarchy exists."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def entry_has_content(self, entry: Any) -> bool:  # noqa: C901
+        if not isinstance(entry, dict):
+            return False
+        senses = entry.get("senses")
+        if not isinstance(senses, list) or not senses:
+            return False
+
+        def _iter_values(values: Any) -> list[str]:
+            if isinstance(values, str):
+                return [values]
+            if isinstance(values, list):
+                return [value for value in values if isinstance(value, str)]
+            return []
+
+        for sense in senses:
+            if not isinstance(sense, dict):
+                continue
+            for key in ("glosses", "raw_glosses"):
+                for value in _iter_values(sense.get(key)):
+                    if value.strip():
+                        return True
+        return False
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:
         """Entries filtered for the language pair."""

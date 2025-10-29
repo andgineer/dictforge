@@ -9,12 +9,7 @@ from typing import Any
 
 import pytest
 
-from dictforge.builder import (
-    Builder,
-    KaikkiDownloadError,
-    KaikkiParseError,
-    KindleBuildError,
-)
+from dictforge.builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
 from dictforge.source_base import DictionarySource
 from dictforge.source_kaikki import KaikkiSource, META_SUFFIX
 from rich.console import Console
@@ -30,19 +25,19 @@ def kaikki_source(builder: Builder) -> KaikkiSource:
     return builder._sources[0]
 
 
-def test_entry_has_content_with_gloss() -> None:
+def test_entry_has_content_with_gloss(kaikki_source: KaikkiSource) -> None:
     entry = {"senses": [{"glosses": [" meaning "]}]}
-    assert DictionarySource.entry_has_content(entry)
+    assert kaikki_source.entry_has_content(entry)
 
 
-def test_entry_has_content_with_raw_gloss() -> None:
+def test_entry_has_content_with_raw_gloss(kaikki_source: KaikkiSource) -> None:
     entry = {"senses": [{"raw_glosses": ["пример"]}]}
-    assert DictionarySource.entry_has_content(entry)
+    assert kaikki_source.entry_has_content(entry)
 
 
-def test_entry_has_content_rejects_empty() -> None:
+def test_entry_has_content_rejects_empty(kaikki_source: KaikkiSource) -> None:
     entry = {"senses": [{"glosses": ["   "], "raw_glosses": [""]}]}
-    assert not DictionarySource.entry_has_content(entry)
+    assert not kaikki_source.entry_has_content(entry)
 
 
 def test_slugify_and_kaikki_slug(builder: Builder, kaikki_source: KaikkiSource) -> None:
@@ -210,6 +205,9 @@ class DummySource(DictionarySource):
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: ARG002
         return self.path, len(self.entries)
+
+    def entry_has_content(self, entry: Any) -> bool:
+        return KaikkiSource.entry_has_content(self, entry)
 
 
 def test_ensure_filtered_language_filters_and_caches(
