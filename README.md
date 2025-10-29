@@ -10,11 +10,11 @@
 | src/dictforge/kindlegen.py      |       16 |        0 |    100% |           |
 | src/dictforge/langutil.py       |       21 |        1 |     95% |        40 |
 | src/dictforge/main.py           |      113 |       22 |     81% |95, 138-139, 177-213 |
-| src/dictforge/source\_base.py   |       55 |        4 |     93% |57, 65, 72, 97 |
-| src/dictforge/source\_kaikki.py |      262 |       49 |     81% |66, 70-71, 79, 148-149, 170, 178-213, 230-231, 253, 270, 303, 306-307, 316, 327-329, 337-338, 347-348, 370, 377, 380-381, 411-412 |
+| src/dictforge/source\_base.py   |       30 |        2 |     93% |    28, 48 |
+| src/dictforge/source\_kaikki.py |      289 |       52 |     82% |93, 97-98, 106, 145, 152, 159, 198-199, 220, 228-263, 280-281, 303, 320, 353, 356-357, 366, 377-379, 387-388, 397-398, 420, 427, 430-431, 461-462 |
 | src/dictforge/tatoeba.py        |      294 |      294 |      0% |     1-405 |
 | src/dictforge/translit.py       |       47 |       47 |      0% |      3-98 |
-|                       **TOTAL** | **1263** |  **551** | **56%** |           |
+|                       **TOTAL** | **1265** |  **552** | **56%** |           |
 
 
 ## Setup coverage badge
