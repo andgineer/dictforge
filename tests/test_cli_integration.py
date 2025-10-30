@@ -120,10 +120,10 @@ def test_cli_filters_and_invokes_kindlegen(monkeypatch, tmp_path: Path) -> None:
         lambda self: raw_path,
     )
 
-    def fake_progress_bar(self, **_: Any) -> Any:  # noqa: ANN001
+    def fake_progress_bar(**_: Any) -> Any:  # noqa: ANN001
         return _noop_progress()
 
-    monkeypatch.setattr("dictforge.builder.Builder._progress_bar", fake_progress_bar)
+    monkeypatch.setattr("dictforge.progress_bar.progress_bar", fake_progress_bar)
 
     result = runner.invoke(cli, ["--kindlegen-path", "/fake/kindlegen", "Serbian", "English"])
 

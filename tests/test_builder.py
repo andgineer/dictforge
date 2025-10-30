@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from dictforge.builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
+from dictforge.kindle import kindle_lang_code
 from dictforge.source_base import DictionarySource
 from dictforge.source_kaikki import KaikkiSource, META_SUFFIX
 from rich.console import Console
@@ -406,13 +407,13 @@ def test_ensure_download_delegates_to_sources(tmp_path: Path) -> None:
     assert source_two.ensure_calls == 1
 
 
-def test_kindle_lang_code_variants(builder: Builder) -> None:
-    assert builder._kindle_lang_code("sr") == "hr"
-    assert builder._kindle_lang_code("en") == "en"
-    assert builder._kindle_lang_code(None) == "en"
+def test_kindle_lang_code_variants() -> None:
+    assert kindle_lang_code("sr") == "hr"
+    assert kindle_lang_code("en") == "en"
+    assert kindle_lang_code(None) == "en"
 
     with pytest.raises(KindleBuildError):
-        builder._kindle_lang_code("sr", override="unsupported")
+        kindle_lang_code("sr", override="unsupported")
 
 
 def test_ensure_opf_languages_updates_metadata(builder: Builder, tmp_path: Path) -> None:

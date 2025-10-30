@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
 
 from rich.console import Console
 from rich.progress import (
     BarColumn,
+    DownloadColumn,
     Progress,
     SpinnerColumn,
     Task,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 
 
@@ -241,3 +246,55 @@ class _KindleProgressCapture(_BaseProgressCapture):
                 self.inflections = None
         else:
             self.warnings.append(line)
+
+
+ProgressAdvance = Callable[[int], None]
+
+
+@contextmanager
+def progress_bar(  # noqa: PLR0913
+    *,
+    console: Console,
+    enabled: bool,
+    description: str,
+    total: int | None = None,
+    unit: str = "entries",
+    refresh_per_second: int = 4,
+) -> Iterator[ProgressAdvance]:
+    """Create a Rich progress context and yield a callback that advances it."""
+    if not enabled:
+
+        def noop(_: int) -> None:
+            return None
+
+        yield noop
+        return
+
+    columns: list[Any] = [TextColumn("[progress.description]{task.description}")]
+    if total is None:
+        columns.append(SpinnerColumn())
+    else:
+        columns.append(BarColumn(bar_width=None))
+    if unit == "B":
+        columns.extend([DownloadColumn(), TransferSpeedColumn()])
+    columns.append(TimeElapsedColumn())
+    if total is not None:
+        columns.append(TimeRemainingColumn())
+    else:
+        label = "bytes" if unit == "B" else unit
+        columns.append(TextColumn(f"{{task.completed:,}} {label}"))
+
+    progress = Progress(
+        *columns,
+        console=console,
+        transient=False,
+        refresh_per_second=refresh_per_second,
+        expand=True,
+    )
+    with progress:
+        task_id = progress.add_task(description, total=total)
+
+        def advance(amount: int) -> None:
+            progress.update(task_id, advance=amount)
+
+        yield advance

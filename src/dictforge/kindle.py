@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 KINDLE_SUPPORTED_LANGS = {
     "af",
     "sq",
@@ -143,3 +145,39 @@ KINDLE_SUPPORTED_LANGS = {
     "xh",
     "zu",
 }
+
+
+class KindleBuildError(RuntimeError):
+    """Raised when Kindle-specific tooling fails or receives invalid configuration."""
+
+
+def kindle_lang_code(code: str | None, override: str | None = None) -> str:
+    """Return the Kindle locale code for ``code`` or the validated ``override``."""
+    if override:
+        normalized_override = override.lower()
+        if normalized_override in KINDLE_SUPPORTED_LANGS:
+            return normalized_override
+        raise KindleBuildError(
+            (
+                f"Kindle language override '{override}' is not supported by Kindle. "
+                "Check the supported list and pick a valid code."
+            ),
+        )
+
+    if not code:
+        return "en"
+
+    normalized = code.lower()
+    if normalized in KINDLE_SUPPORTED_LANGS:
+        return normalized
+
+    overrides = {
+        "sr": "hr",
+        "en": "en-us",
+    }
+    normalized = overrides.get(normalized, normalized)
+
+    if normalized == "en":
+        return "en-us"
+
+    return normalized if normalized in KINDLE_SUPPORTED_LANGS else "en"

@@ -8,8 +8,9 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from collections.abc import Iterable
+from contextlib import redirect_stderr, redirect_stdout
+from functools import partial
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -17,26 +18,17 @@ from typing import Any, TextIO, cast
 import requests
 from ebook_dictionary_creator import DictionaryCreator
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
 
-from .kindle import KINDLE_SUPPORTED_LANGS
+from .kindle import KindleBuildError, kindle_lang_code
 from .langutil import lang_meta
-from .progress_bar import _BaseProgressCapture, _DatabaseProgressCapture, _KindleProgressCapture
+from .progress_bar import (
+    _BaseProgressCapture,
+    _DatabaseProgressCapture,
+    _KindleProgressCapture,
+    progress_bar,
+)
 from .source_base import DictionarySource
 from .source_kaikki import KaikkiDownloadError, KaikkiParseError, KaikkiSource
-
-
-class KindleBuildError(RuntimeError):
-    """Raised when kindlegen fails while creating the MOBI file."""
 
 
 class Builder:
@@ -56,62 +48,21 @@ class Builder:
         self.session = requests.Session()
         self._show_progress = sys.stderr.isatty() if show_progress is None else show_progress
         self._console = Console(stderr=True, force_terminal=self._show_progress)
+        self._progress_factory = partial(
+            progress_bar,
+            console=self._console,
+            enabled=self._show_progress,
+        )
         self._sources: list[DictionarySource]
         if sources is None:
             default_source = KaikkiSource(
                 cache_dir=self.cache_dir,
                 session=self.session,
-                progress_factory=self._progress_bar,
+                progress_factory=self._progress_factory,
             )
             self._sources = [default_source]
         else:
             self._sources = list(sources)
-
-    @contextmanager
-    def _progress_bar(
-        self,
-        *,
-        description: str,
-        total: int | None = None,
-        unit: str = "entries",
-    ) -> Iterator[Callable[[int], None]]:
-        """Yield a callback that advances a Rich progress bar, or a noop when hidden."""
-        if not self._show_progress:
-
-            def noop(_: int) -> None:
-                return None
-
-            yield noop
-            return
-
-        columns: list[Any] = [TextColumn("[progress.description]{task.description}")]
-        if total is None:
-            columns.append(SpinnerColumn())
-        else:
-            columns.append(BarColumn(bar_width=None))
-        if unit == "B":
-            columns.extend([DownloadColumn(), TransferSpeedColumn()])
-        columns.append(TimeElapsedColumn())
-        if total is not None:
-            columns.append(TimeRemainingColumn())
-        else:
-            label = "bytes" if unit == "B" else unit
-            columns.append(TextColumn(f"{{task.completed:,}} {label}"))
-
-        progress = Progress(
-            *columns,
-            console=self._console,
-            transient=False,
-            refresh_per_second=4,
-            expand=True,
-        )
-        with progress:
-            task_id = progress.add_task(description, total=total)
-
-            def advance(amount: int) -> None:
-                progress.update(task_id, advance=amount)
-
-            yield advance
 
     def _emit_creator_output(self, label: str, capture: _BaseProgressCapture) -> None:
         """Dump captured stdout/stderr with a friendly heading when something goes wrong."""
@@ -248,37 +199,6 @@ class Builder:
         """Return a filesystem-friendly slug used for cache file names."""
         return re.sub(r"[^A-Za-z0-9]+", "_", value.strip()) or "language"
 
-    def _kindle_lang_code(self, code: str | None, override: str | None = None) -> str:
-        """Derive the Kindle language identifier, applying overrides/fallbacks."""
-        if override:
-            normalized_override = override.lower()
-            if normalized_override in KINDLE_SUPPORTED_LANGS:
-                return normalized_override
-            raise KindleBuildError(
-                (
-                    f"Kindle language override '{override}' is not supported by Kindle. "
-                    "Check the supported list and pick a valid code."
-                ),
-            )
-
-        if not code:
-            return "en"
-
-        normalized = code.lower()
-        if normalized in KINDLE_SUPPORTED_LANGS:
-            return normalized
-
-        overrides = {
-            "sr": "hr",
-            "en": "en-us",
-        }
-        normalized = overrides.get(normalized, normalized)
-
-        if normalized == "en":
-            return "en-us"
-
-        return normalized if normalized in KINDLE_SUPPORTED_LANGS else "en"
-
     def _export_one(  # noqa: PLR0913,PLR0915
         self,
         in_lang: str,
@@ -297,8 +217,8 @@ class Builder:
         """Build and export a single dictionary volume from the prepared Kaikki file."""
         iso_in, _ = lang_meta(in_lang)
         iso_out, _ = lang_meta(out_lang)
-        kindle_in = self._kindle_lang_code(iso_in)
-        kindle_out = self._kindle_lang_code(iso_out, override=kindle_lang_override)
+        kindle_in = kindle_lang_code(iso_in)
+        kindle_out = kindle_lang_code(iso_out, override=kindle_lang_override)
 
         dc = DictionaryCreator(in_lang, out_lang, kaikki_file_path=str(language_file))
         dc.source_language = kindle_in
@@ -494,40 +414,51 @@ class Builder:
         kindle_lang_override: str | None = None,
     ) -> dict[str, int]:
         """Build the primary dictionary and any merged extras, returning entry counts."""
-        primary = in_langs[0]
-        counts = {}
-        primary_file, primary_count = self._prepare_combined_entries(primary, out_lang)
-        counts[primary] = self._export_one(
-            primary,
-            out_lang,
-            outdir,
-            kindlegen_path,
-            title,
-            shortname,
-            include_pos,
-            try_fix_inflections,
-            max_entries,
-            primary_file,
-            primary_count,
-            kindle_lang_override,
-        )
+        counts: dict[str, int] = {}
+        exports: list[tuple[str, Path, int, Path, str, str]] = []
+        for index, in_lang in enumerate(in_langs):
+            combined_file, entry_count = self._prepare_combined_entries(in_lang, out_lang)
+            if index == 0:
+                volume_outdir = outdir
+                volume_title = title
+                volume_shortname = shortname
+            else:
+                extra_slug = in_lang.replace(" ", "_")
+                volume_outdir = outdir / f"extra_{extra_slug}"
+                volume_outdir.mkdir(parents=True, exist_ok=True)
+                volume_title = f"{title} (extra: {in_lang})"
+                volume_shortname = f"{shortname}+{in_lang}"
+            exports.append(
+                (
+                    in_lang,
+                    combined_file,
+                    entry_count,
+                    volume_outdir,
+                    volume_title,
+                    volume_shortname,
+                ),
+            )
 
-        for extra in in_langs[1:]:
-            extra_out = outdir / f"extra_{extra.replace(' ', '_')}"
-            extra_out.mkdir(parents=True, exist_ok=True)
-            extra_file, extra_count = self._prepare_combined_entries(extra, out_lang)
-            counts[extra] = self._export_one(
-                extra,
+        for (
+            in_lang,
+            combined_file,
+            entry_count,
+            volume_outdir,
+            volume_title,
+            volume_shortname,
+        ) in exports:
+            counts[in_lang] = self._export_one(
+                in_lang,
                 out_lang,
-                extra_out,
+                volume_outdir,
                 kindlegen_path,
-                f"{title} (extra: {extra})",
-                f"{shortname}+{extra}",
+                volume_title,
+                volume_shortname,
                 include_pos,
                 try_fix_inflections,
                 max_entries,
-                extra_file,
-                extra_count,
+                combined_file,
+                entry_count,
                 kindle_lang_override,
             )
 
