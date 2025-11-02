@@ -51,6 +51,19 @@ def test_ensure_download_creates_cache(builder: Builder) -> None:
     assert builder.cache_dir.exists()
 
 
+def test_ensure_download_reset_removes_cache(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    builder = Builder(cache_dir, show_progress=False)
+    builder.ensure_download_dirs()
+    sample_file = cache_dir / "dummy.txt"
+    sample_file.write_text("cached", encoding="utf-8")
+
+    builder.ensure_download_dirs(force=True)
+
+    assert not sample_file.exists()
+    assert cache_dir.exists()
+
+
 def test_ensure_language_dataset_uses_cached_file(
     builder: Builder, kaikki_source: KaikkiSource
 ) -> None:

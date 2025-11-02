@@ -190,7 +190,8 @@ class Builder:
 
     def ensure_download_dirs(self, force: bool = False) -> None:  # noqa: ARG002
         """Delegate download preparation to each configured source."""
-        # Placeholder for future caching/version pinning; ensure dir exists.
+        if force:
+            shutil.rmtree(self.cache_dir, ignore_errors=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for source in self._sources:
             source.ensure_download_dirs(force=force)

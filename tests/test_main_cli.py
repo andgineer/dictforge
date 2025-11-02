@@ -94,6 +94,49 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
     assert build_kwargs["outdir"] == Path(tmp_path / "out")
 
 
+def test_cli_reset_cache_triggers_cleanup(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:
+    config = _base_config(tmp_path)
+    monkeypatch.setattr("dictforge.main.load_config", lambda: config)
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "/usr/bin/kindlegen")
+    monkeypatch.setattr(
+        "dictforge.main.make_defaults",
+        lambda *_: {
+            "title": "Title",
+            "shortname": "Short",
+            "outdir": str(tmp_path / "out"),
+            "in_code": "sr",
+            "out_code": "en",
+        },
+    )
+
+    calls: dict[str, object] = {}
+
+    class DummyBuilder:
+        def __init__(
+            self,
+            cache_dir: Path,
+            *,
+            show_progress: bool | None = None,
+            reset_cache: bool = False,
+        ) -> None:
+            calls["cache_dir"] = cache_dir
+            calls["show_progress"] = show_progress
+            calls["reset_cache"] = reset_cache
+
+        def ensure_download_dirs(self, force: bool = False) -> None:
+            calls["ensure_download_dirs"] = force
+
+        def build_dictionary(self, **_: object) -> dict[str, int]:  # pragma: no cover - simple stub
+            return {"Serbo-Croatian": 5}
+
+    monkeypatch.setattr("dictforge.main.Builder", DummyBuilder)
+
+    result = runner.invoke(cli, ["--reset-cache", "sr"])
+
+    assert result.exit_code == 0
+    assert calls["ensure_download_dirs"] is True
+
+
 def test_cli_download_error(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:
     config = _base_config(tmp_path)
     monkeypatch.setattr("dictforge.main.load_config", lambda: config)
