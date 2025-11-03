@@ -10,12 +10,12 @@
 | src/dictforge/kindle.py         |       19 |        1 |     95% |       181 |
 | src/dictforge/kindlegen.py      |       16 |        0 |    100% |           |
 | src/dictforge/langutil.py       |       21 |        1 |     95% |        40 |
-| src/dictforge/main.py           |      112 |       22 |     80% |95, 138-139, 176-212 |
+| src/dictforge/main.py           |      123 |       24 |     80% |39, 42, 143, 186-187, 224-260 |
 | src/dictforge/progress\_bar.py  |      162 |       81 |     50% |24-29, 95, 103-108, 121-125, 129-133, 137-139, 153, 157-160, 176-190, 215-248, 277, 279, 282 |
 | src/dictforge/source\_base.py   |       30 |        2 |     93% |    28, 48 |
 | src/dictforge/source\_kaikki.py |      289 |       52 |     82% |93, 97-98, 106, 145, 152, 159, 198-199, 220, 228-263, 280-281, 303, 320, 353, 356-357, 366, 377-379, 387-388, 397-398, 420, 427, 430-431, 461-462 |
 | src/dictforge/translit.py       |       47 |       47 |      0% |      3-98 |
-|                       **TOTAL** |  **991** |  **244** | **75%** |           |
+|                       **TOTAL** | **1002** |  **246** | **75%** |           |
 
 
 ## Setup coverage badge
