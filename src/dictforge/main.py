@@ -11,7 +11,7 @@ from rich.text import Text
 from dictforge import __version__
 
 from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
-from .config import config_path, load_config, save_config
+from .config import DEFAULTS, config_path, load_config, save_config
 from .kindlegen import guess_kindlegen_path
 from .langutil import lang_meta, make_defaults, normalize_input_name
 
@@ -24,6 +24,24 @@ click.rich_click.STYLE_SWITCH = "bold"
 click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
 
 
+try:  # Populate help defaults without failing the CLI if config loading breaks.
+    _HELP_CONFIG = load_config()
+except Exception:  # noqa: BLE001  # pragma: no cover - defensive fallback for corrupted config
+    _HELP_CONFIG = DEFAULTS.copy()
+
+
+def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
+    """Format the current config value for ``key`` for Click help output."""
+    value = _HELP_CONFIG.get(key)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return empty_label
+    if isinstance(value, str):
+        return value or empty_label
+    return str(value)
+
+
 @click.group(invoke_without_command=True, context_settings={"ignore_unknown_options": False})
 @click.argument("in_lang", required=False)
 @click.argument("out_lang", required=False)
@@ -31,30 +49,60 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
     "--merge-in-langs",
     default=None,
     help="Comma-separated extra input languages to merge (overrides config)",
+    show_default=_show_config_default("merge_in_langs"),
 )
-@click.option("--title", default="", help="Override auto title")
-@click.option("--shortname", default="", help="Override auto short name")
-@click.option("--outdir", default="", help="Override auto output directory")
-@click.option("--kindlegen-path", default="", help="Path to kindlegen (auto-detect if empty)")
-@click.option("--max-entries", type=int, default=0, help="Debug: limit number of entries")
-@click.option("--include-pos", is_flag=True, default=None, help="Include part-of-speech headers")
+@click.option("--title", default="", help="Override auto title", show_default="auto")
+@click.option("--shortname", default="", help="Override auto short name", show_default="auto")
+@click.option("--outdir", default="", help="Override auto output directory", show_default="auto")
+@click.option(
+    "--kindlegen-path",
+    default="",
+    help="Path to kindlegen (auto-detect if empty)",
+    show_default="auto-detect",
+)
+@click.option(
+    "--max-entries",
+    type=int,
+    default=0,
+    help="Debug: limit number of entries",
+    show_default=True,
+)
+@click.option(
+    "--include-pos",
+    is_flag=True,
+    default=None,
+    help="Include part-of-speech headers",
+    show_default=_show_config_default("include_pos"),
+)
 @click.option(
     "--try-fix-inflections",
     is_flag=True,
     default=None,
-    help="Fix lookup for inflections (mostly Latin scripts)",
+    help=(
+        "Much slower, but vastly improves the lookup"
+        "of words that are not recognized by default due to the buggy algorithm that "
+        "does not look at inflections if a fitting base word exists"
+    ),
+    show_default=_show_config_default("try_fix_inflections"),
 )
 @click.option(
     "--kindle-lang",
     default="",
     help="Override Kindle dictionary language code if your target language is unsupported",
+    show_default="auto",
 )
-@click.option("--cache-dir", default=None, help="Cache directory for downloaded JSONL")
+@click.option(
+    "--cache-dir",
+    default=None,
+    help="Cache directory for downloaded JSONL",
+    show_default=_show_config_default("cache_dir"),
+)
 @click.option(
     "--reset-cache",
     is_flag=True,
     default=False,
-    help="Force re-download of cached sources",
+    help="Force re-download of sources",
+    show_default=True,
 )
 @click.option(
     "--version",
