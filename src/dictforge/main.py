@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sys
 from json import JSONDecodeError
 from pathlib import Path
@@ -25,14 +23,14 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
 
 
 try:  # Populate help defaults without failing the CLI if config loading breaks.
-    _HELP_CONFIG = load_config()
+    _help_config_store = {"config": load_config()}
 except Exception:  # noqa: BLE001  # pragma: no cover - defensive fallback for corrupted config
-    _HELP_CONFIG = DEFAULTS.copy()
+    _help_config_store = {"config": DEFAULTS.copy()}
 
 
 def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
     """Format the current config value for ``key`` for Click help output."""
-    value = _HELP_CONFIG.get(key)
+    value = _help_config_store["config"].get(key)
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:
@@ -142,6 +140,10 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
     if ctx.invoked_subcommand is not None:
         return
 
+    if in_lang == "init" and out_lang is None:
+        ctx.invoke(cmd_init)
+        return
+
     console = Console(stderr=True)
 
     if version:
@@ -159,7 +161,9 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
     in_lang_norm = normalize_input_name(in_lang)
     out_lang_norm = normalize_input_name(out_lang) if out_lang else cfg["default_out_lang"]
 
-    kindlegen = kindlegen_path or guess_kindlegen_path()
+    config_kindlegen = str(cfg.get("kindlegen_path") or "")
+    kindlegen_input = kindlegen_path or config_kindlegen
+    kindlegen = kindlegen_input or guess_kindlegen_path()
     if not kindlegen:
         error_message = Text("kindlegen not found; install ", style="bold red")
         error_message.append(
@@ -284,5 +288,45 @@ def cmd_init() -> None:
         default=cfg.get("default_out_lang", "English"),
     )
     cfg["default_out_lang"] = val
+
+    current_kindlegen = str(cfg.get("kindlegen_path") or "")
+    guessed_kindlegen = guess_kindlegen_path()
+    if guessed_kindlegen:
+        click.echo(
+            f"Detected Kindle Previewer kindlegen executable: {guessed_kindlegen}",
+        )
+    else:
+        click.echo("Could not auto-detect the Kindle Previewer kindlegen executable.")
+        if current_kindlegen:
+            click.echo(f"Current configured path: {current_kindlegen}")
+        click.echo("Common locations include:")
+        click.echo("  • macOS:")
+        click.echo("      /Applications/Kindle Previewer 3.app/Contents/MacOS/lib/fc/bin/kindlegen")
+        click.echo("      /Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen")
+        click.echo("  • Windows (local profile):")
+        click.echo("      %LocalAppData%/Amazon/Kindle Previewer 3/lib/fc/bin/kindlegen.exe")
+        click.echo("  • Windows (system install):")
+        click.echo("      C:/Program Files/Amazon/Kindle Previewer 3/lib/fc/bin/kindlegen.exe")
+        click.echo("  • Linux via Wine:")
+        click.echo(
+            "      ~/.wine/drive_c/Program Files/Amazon/"
+            "Kindle Previewer 3/lib/fc/bin/kindlegen.exe",
+        )
+
+    kindlegen_default = current_kindlegen or guessed_kindlegen
+    prompt_default = kindlegen_default or ""
+    prompt_show_default = bool(kindlegen_default)
+    kindlegen_path = click.prompt(
+        "Enter Kindle Previewer kindlegen path",
+        default=prompt_default,
+        show_default=prompt_show_default,
+    ).strip()
+    if kindlegen_path and not Path(kindlegen_path).exists():
+        click.echo(
+            "Warning: the provided path does not currently exist. Please verify after setup.",
+        )
+    cfg["kindlegen_path"] = kindlegen_path
+
     save_config(cfg)
+    _help_config_store["config"] = cfg.copy()
     click.secho(f"Saved: {config_path()}", fg="green", bold=True)

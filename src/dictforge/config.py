@@ -15,6 +15,7 @@ DEFAULTS = {
     "include_pos": False,
     "try_fix_inflections": False,
     "cache_dir": ".wiktex-cache",
+    "kindlegen_path": "",
 }
 
 

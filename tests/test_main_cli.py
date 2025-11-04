@@ -23,6 +23,7 @@ def _base_config(tmp_path: Path) -> dict[str, object]:
         "include_pos": False,
         "try_fix_inflections": False,
         "cache_dir": str(tmp_path / "cache"),
+        "kindlegen_path": "",
     }
 
 
@@ -59,6 +60,8 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
 
     calls: dict[str, object] = {}
 
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "/usr/bin/kindlegen")
+
     class DummyBuilder:
         def __init__(
             self,
@@ -92,6 +95,7 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
     assert build_kwargs["in_langs"] == ["Serbo-Croatian", "Croatian"]
     assert build_kwargs["title"] == "Title"
     assert build_kwargs["outdir"] == Path(tmp_path / "out")
+    assert build_kwargs["kindlegen_path"] == "/usr/bin/kindlegen"
 
 
 def test_cli_reset_cache_triggers_cleanup(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:
@@ -192,16 +196,17 @@ def test_cli_init_updates_config(monkeypatch, runner: CliRunner, tmp_path: Path)
     saved: dict[str, object] = {}
 
     monkeypatch.setattr("dictforge.main.load_config", lambda: config.copy())
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "/detected/kindlegen")
 
     def fake_save(data: dict[str, object]) -> None:
         saved.update(data)
 
     monkeypatch.setattr("dictforge.main.save_config", fake_save)
 
-    init_cmd = cli.commands["init"]
-    result = runner.invoke(init_cmd, input="Spanish\n")
+    result = runner.invoke(cli, ["init"], input="Spanish\n\n")
     assert result.exit_code == 0
     assert saved["default_out_lang"] == "Spanish"
+    assert saved["kindlegen_path"] == "/detected/kindlegen"
     assert "Saved" in result.output
 
 
@@ -212,3 +217,26 @@ def test_kindle_lang_override_accepts_supported(tmp_path: Path) -> None:
 def test_kindle_lang_override_rejects_unsupported(tmp_path: Path) -> None:
     with pytest.raises(KindleBuildError):
         kindle_lang_code("sr", override="xx")
+
+
+def test_cli_init_hints_when_kindlegen_missing(
+    monkeypatch, runner: CliRunner, tmp_path: Path
+) -> None:
+    config = _base_config(tmp_path)
+    saved: dict[str, object] = {}
+
+    monkeypatch.setattr("dictforge.main.load_config", lambda: config.copy())
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "")
+
+    def fake_save(data: dict[str, object]) -> None:
+        saved.update(data)
+
+    monkeypatch.setattr("dictforge.main.save_config", fake_save)
+
+    path_input = str(tmp_path / "Kindle Previewer" / "kindlegen")
+    result = runner.invoke(cli, ["init"], input=f"\n{path_input}\n")
+
+    assert result.exit_code == 0
+    assert "Common locations include" in result.output
+    assert "Kindle Previewer 3.app" in result.output
+    assert saved["kindlegen_path"] == path_input

@@ -60,6 +60,7 @@ def _fake_config(tmp_path: Path) -> dict[str, object]:
         "include_pos": False,
         "try_fix_inflections": False,
         "cache_dir": str(tmp_path / "cache"),
+        "kindlegen_path": "",
     }
 
 

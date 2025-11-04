@@ -9,8 +9,11 @@ def guess_kindlegen_path() -> str:
     system = platform.system()
     candidates = []
     if system == "Darwin":
-        candidates.append(
-            "/Applications/Kindle Previewer 3.app/Contents/MacOS/lib/fc/bin/kindlegen",
+        candidates.extend(
+            [
+                "/Applications/Kindle Previewer 3.app/Contents/MacOS/lib/fc/bin/kindlegen",
+                "/Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen",
+            ],
         )
     elif system == "Windows":
         home = os.environ.get("USERPROFILE") or os.environ.get("HOMEPATH") or "C:\\Users\\Public"
