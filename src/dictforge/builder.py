@@ -260,7 +260,7 @@ class Builder:
                 dc.export_to_kindle(
                     kindlegen_path=kindlegen_path,
                     try_to_fix_failed_inflections=try_fix_inflections,  # type: ignore[arg-type]  # bug in the lib
-                    author="Wiktionary via Wiktextract (Kaikki.org)",
+                    author="andgineer/dictforge",
                     title=title,
                     mobi_temp_folder_path=str(mobi_base),
                     mobi_output_file_path=f"{mobi_base}.mobi",

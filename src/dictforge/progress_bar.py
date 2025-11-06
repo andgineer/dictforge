@@ -159,6 +159,16 @@ class _BaseProgressCapture(io.TextIOBase):
             self._buffer = ""
         return self._captured.getvalue()
 
+    @staticmethod
+    def _extract_number_prefix(line: str, suffix: str) -> int | None:
+        """Extract number from line prefix before given suffix, or None if invalid."""
+        if not line.endswith(suffix):
+            return None
+        try:
+            return int(line.split(" ", 1)[0])
+        except ValueError:
+            return None
+
 
 class _DatabaseProgressCapture(_BaseProgressCapture):
     """Interpret database build output to keep the progress bar in sync."""
@@ -175,19 +185,24 @@ class _DatabaseProgressCapture(_BaseProgressCapture):
         """Translate sqlite import chatter into progress updates and messages."""
         if not line:
             return
+
+        # Handle inflections to add - silently ignore if pattern matches but number is invalid
         if line.endswith("inflections to add manually"):
-            try:
-                total = int(line.split(" ", 1)[0])
-            except ValueError:
-                return
-            self.set_description("Adding inflections")
-            self.set_total(total)
-        elif line.isdigit():
+            total = self._extract_number_prefix(line, "inflections to add manually")
+            if total is not None:
+                self.set_description("Adding inflections")
+                self.set_total(total)
+            return
+
+        if line.isdigit():
             self.advance_to(int(line))
-        elif line.endswith("relations with 3 elements"):
+            return
+
+        if line.endswith("relations with 3 elements"):
             self.set_description("Linking inflections")
-        else:
-            self.warnings.append(line)
+            return
+
+        self.warnings.append(line)
 
 
 class _KindleProgressCapture(_BaseProgressCapture):
@@ -210,42 +225,65 @@ class _KindleProgressCapture(_BaseProgressCapture):
         self.base_forms: int | None = None
         self.inflections: int | None = None
 
-    def handle_line(self, line: str) -> None:  # noqa: C901,PLR0912
+    def _handle_description_update(self, line: str, exact_match: str, description: str) -> bool:
+        """Update description if line exactly matches given string."""
+        if line == exact_match:
+            self.set_description(description)
+            return True
+        return False
+
+    def _handle_words_progress(self, line: str) -> bool:
+        """Handle lines ending with ' words' and update progress accordingly."""
+        words = self._extract_number_prefix(line, " words")
+        if words is None:
+            return False
+        if self._total_hint is None:
+            self.set_total(self.base_forms if self.base_forms is not None else words)
+        self.advance_to(words)
+        return True
+
+    def handle_line(self, line: str) -> None:  # noqa: C901,PLR0911
         """Derive progress milestones from Kindle Previewer console output."""
         if not line:
             return
-        if line == "Getting base forms":
-            self.set_description("Loading base forms")
-        elif line.startswith("Iterating through base forms"):
+
+        # Exact match descriptions
+        if self._handle_description_update(line, "Getting base forms", "Loading base forms"):
+            return
+        if self._handle_description_update(line, "Creating dictionary", "Compiling dictionary"):
+            return
+        if self._handle_description_update(line, "Writing dictionary", "Writing MOBI file"):
+            return
+
+        # Prefix match descriptions
+        if line.startswith("Iterating through base forms"):
             self.set_description("Processing base forms")
-        elif line.endswith(" words"):
-            try:
-                words = int(line.split(" ", 1)[0])
-            except ValueError:
+            return
+
+        # Progress updates with numbers
+        # Handle words - silently ignore if pattern matches but number is invalid
+        if line.endswith(" words"):
+            if self._handle_words_progress(line):
                 return
-            if self._total_hint is None and self.base_forms is not None:
-                self.set_total(self.base_forms)
-            elif self._total_hint is None:
-                self.set_total(words)
-            self.advance_to(words)
-        elif line == "Creating dictionary":
-            self.set_description("Compiling dictionary")
-        elif line == "Writing dictionary":
-            self.set_description("Writing MOBI file")
-        elif line.endswith(" base forms"):
-            try:
-                self.base_forms = int(line.split(" ", 1)[0])
-            except ValueError:
-                return
-            self.set_total(self.base_forms)
-            self.advance_to(self.base_forms)
-        elif line.endswith(" inflections"):
-            try:
-                self.inflections = int(line.split(" ", 1)[0])
-            except ValueError:
-                self.inflections = None
-        else:
-            self.warnings.append(line)
+            return
+
+        # Handle base forms - silently ignore if pattern matches but number is invalid
+        if line.endswith(" base forms"):
+            base_forms = self._extract_number_prefix(line, " base forms")
+            if base_forms is not None:
+                self.base_forms = base_forms
+                self.set_total(base_forms)
+                self.advance_to(base_forms)
+            return
+
+        # Handle inflections - silently ignore if pattern matches but number is invalid
+        if line.endswith(" inflections"):
+            inflections = self._extract_number_prefix(line, " inflections")
+            if inflections is not None:
+                self.inflections = inflections
+            return
+
+        self.warnings.append(line)
 
 
 ProgressAdvance = Callable[[int], None]
