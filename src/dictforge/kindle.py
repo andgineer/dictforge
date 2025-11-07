@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 KINDLE_SUPPORTED_LANGS = {
     "af",
     "sq",

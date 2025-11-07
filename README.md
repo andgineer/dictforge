@@ -40,7 +40,6 @@ For more information about a script run:
 
 
 ## Coverage report
-* [Codecov](https://app.codecov.io/gh/andgineer/dictforge/tree/main/src%2Fdictforge)
 * [Coveralls](https://coveralls.io/github/andgineer/dictforge)
 
 > Created with cookiecutter using [template](https://github.com/andgineer/cookiecutter-python-package)

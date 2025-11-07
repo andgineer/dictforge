@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime as real_datetime
 
 from dictforge.langutil import LANG_MAP, lang_meta, make_defaults, normalize_input_name

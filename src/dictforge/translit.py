@@ -1,6 +1,4 @@
-"""Serbian Cyrillic/Latin transliteration without external deps."""
-
-from __future__ import annotations
+"""Serbian Cyrillic/Latin transliteration."""
 
 import unicodedata
 
