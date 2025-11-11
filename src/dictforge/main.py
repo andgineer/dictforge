@@ -10,8 +10,8 @@ from dictforge import __version__
 
 from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
 from .config import DEFAULTS, config_path, load_config, save_config
+from .kaikki_utils import lang_meta, make_defaults, normalize_input_name
 from .kindlegen import guess_kindlegen_path
-from .langutil import lang_meta, make_defaults, normalize_input_name
 
 # rich-click styling
 click.rich_click.TEXT_MARKUP = "rich"

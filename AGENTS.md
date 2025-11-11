@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The CLI entrypoint lives in `src/dictforge/main.py`, while feature modules such as `builder.py`, `langutil.py`, and `kindle.py` hold the ebook dictionary logic. Shared shell helpers are under `scripts/`, documentation and localisation assets reside in `docs/`, and tests mirror CLI behaviour in `tests/`. Tooling metadata is maintained in `pyproject.toml` and `uv.lock`; keep changes in sync across these files when adding dependencies.
+The CLI entrypoint lives in `src/dictforge/main.py`, while feature modules such as `builder.py`, and `kindle.py` hold the ebook dictionary logic. Shared shell helpers are under `scripts/`, documentation and localisation assets reside in `docs/`, and tests mirror CLI behaviour in `tests/`. Tooling metadata is maintained in `pyproject.toml` and `uv.lock`; keep changes in sync across these files when adding dependencies.
 
 ## Build, Test, and Development Commands
 - `source activate.sh` — enter the managed Python 3.12 environment before running any tooling. Always run this first in each new shell.

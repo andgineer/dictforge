@@ -17,8 +17,8 @@ import requests
 from ebook_dictionary_creator import DictionaryCreator
 from rich.console import Console
 
+from .kaikki_utils import lang_meta
 from .kindle import KindleBuildError, kindle_lang_code
-from .langutil import lang_meta
 from .progress_bar import (
     _BaseProgressCapture,
     _DatabaseProgressCapture,

@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import requests
 
-from .langutil import lang_meta
+from .kaikki_utils import lang_meta
 from .source_base import DictionarySource
 
 RAW_DUMP_URL = "https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz"

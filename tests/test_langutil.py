@@ -1,6 +1,6 @@
 from datetime import datetime as real_datetime
 
-from dictforge.langutil import LANG_MAP, lang_meta, make_defaults, normalize_input_name
+from dictforge.kaikki_utils import LANG_MAP, lang_meta, make_defaults, normalize_input_name
 
 
 def test_normalize_input_name_alias_and_whitespace() -> None:
@@ -24,7 +24,7 @@ def test_make_defaults_generates_expected_fields(monkeypatch) -> None:
         def utcnow(cls) -> real_datetime:
             return real_datetime(2024, 1, 2)
 
-    monkeypatch.setattr("dictforge.langutil.datetime", DummyDatetime)
+    monkeypatch.setattr("dictforge.kaikki_utils.datetime", DummyDatetime)
 
     defaults = make_defaults("Serbo-Croatian", "English")
     assert defaults["title"].startswith("Srpsko-hrvatski → English")
