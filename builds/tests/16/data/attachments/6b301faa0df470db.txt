@@ -1,7 +1,0 @@
- Source statistics
-  Kaikki headwords: 1 (unique 1)
-  Tatoeba expressions: 0 (unique 0)
-  Overlap: 0
-  Enriched from Tatoeba: 0
-  Final dictionary size: 1
- English → Russian: 1 entries
