@@ -7,9 +7,9 @@
 | src/dictforge/\_\_about\_\_.py  |        1 |        0 |    100% |           |
 | src/dictforge/builder.py        |      255 |       35 |     86% |67-71, 83, 85, 116, 119-120, 125, 131-132, 137, 152, 157, 165, 171, 177, 181-182, 235-239, 268-270, 282, 293, 330, 343, 350, 387 |
 | src/dictforge/config.py         |       37 |        3 |     92% |   7-8, 53 |
+| src/dictforge/kaikki\_utils.py  |       20 |        1 |     95% |        38 |
 | src/dictforge/kindle.py         |       18 |        1 |     94% |       179 |
 | src/dictforge/kindlegen.py      |       16 |        0 |    100% |           |
-| src/dictforge/langutil.py       |       20 |        1 |     95% |        38 |
 | src/dictforge/main.py           |      152 |       25 |     84% |37, 40, 141, 190-191, 228-264, 301 |
 | src/dictforge/progress\_bar.py  |      178 |       26 |     85% |22-27, 93, 101-106, 120, 123, 128, 131, 137, 155-158, 164, 313, 315, 318 |
 | src/dictforge/source\_base.py   |       29 |        2 |     93% |    26, 46 |
