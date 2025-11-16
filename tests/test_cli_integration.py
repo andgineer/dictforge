@@ -100,6 +100,11 @@ def test_cli_filters_and_invokes_kindlegen(monkeypatch, tmp_path: Path) -> None:
         for entry in raw_entries:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    # Create fake kindlegen executable
+    fake_kindlegen = tmp_path / "fake_kindlegen"
+    fake_kindlegen.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_kindlegen.chmod(0o755)
+
     config = _fake_config(tmp_path)
     output_dir = tmp_path / "output"
     defaults = {
@@ -111,9 +116,9 @@ def test_cli_filters_and_invokes_kindlegen(monkeypatch, tmp_path: Path) -> None:
     }
 
     monkeypatch.setattr("dictforge.main.load_config", lambda: config)
-    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "/fake/kindlegen")
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: str(fake_kindlegen))
     monkeypatch.setattr("dictforge.main.make_defaults", lambda *_: defaults)
-    monkeypatch.setattr("dictforge.builder.DictionaryCreator", RecordingCreator)
+    monkeypatch.setattr("dictforge.export_mobi.DictionaryCreator", RecordingCreator)
     monkeypatch.setattr(
         "dictforge.source_kaikki.KaikkiSource._ensure_raw_dump",
         lambda self: raw_path,
@@ -124,7 +129,7 @@ def test_cli_filters_and_invokes_kindlegen(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("dictforge.progress_bar.progress_bar", fake_progress_bar)
 
-    result = runner.invoke(cli, ["--kindlegen-path", "/fake/kindlegen", "Serbian", "English"])
+    result = runner.invoke(cli, ["--kindlegen-path", str(fake_kindlegen), "Serbian", "English"])
 
     assert result.exit_code == 0, result.output
     assert "Starting build: Serbian → English" in result.output
@@ -149,7 +154,7 @@ def test_cli_filters_and_invokes_kindlegen(monkeypatch, tmp_path: Path) -> None:
     )
 
     assert creator.export_args is not None
-    assert creator.export_args["kindlegen_path"] == "/fake/kindlegen"
+    assert creator.export_args["kindlegen_path"] == str(fake_kindlegen)
     assert creator.export_args["output_path"].name.endswith("Serbian-English.mobi")
     assert creator.export_args["title"] == "Serbian → English (Test)"
     assert creator.export_args["try_fix"] is False

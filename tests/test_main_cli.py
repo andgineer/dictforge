@@ -93,7 +93,8 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
     assert build_kwargs["in_langs"] == ["Serbo-Croatian", "Croatian"]
     assert build_kwargs["title"] == "Title"
     assert build_kwargs["outdir"] == Path(tmp_path / "out")
-    assert build_kwargs["kindlegen_path"] == "/usr/bin/kindlegen"
+    assert build_kwargs["export_format"] == "mobi"
+    assert build_kwargs["export_options"]["kindlegen_path"] == "/usr/bin/kindlegen"
 
 
 def test_cli_reset_cache_triggers_cleanup(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:

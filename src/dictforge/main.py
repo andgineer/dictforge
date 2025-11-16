@@ -1,6 +1,7 @@
 import sys
 from json import JSONDecodeError
 from pathlib import Path
+from typing import Any
 
 import rich_click as click
 from rich.console import Console
@@ -8,8 +9,15 @@ from rich.text import Text
 
 from dictforge import __version__
 
-from .builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
+from .builder import (
+    Builder,
+    KaikkiDownloadError,
+    KaikkiParseError,
+    KindleBuildError,
+    get_available_formats,
+)
 from .config import DEFAULTS, config_path, load_config, save_config
+from .export_base import ExportError
 from .kaikki_utils import lang_meta, make_defaults, normalize_input_name
 from .kindlegen import guess_kindlegen_path
 
@@ -40,9 +48,21 @@ def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
     return str(value)
 
 
+def _get_format_choices() -> str:
+    """Return comma-separated list of available export formats."""
+    return ", ".join(get_available_formats().keys())
+
+
 @click.group(invoke_without_command=True, context_settings={"ignore_unknown_options": False})
 @click.argument("in_lang", required=False)
 @click.argument("out_lang", required=False)
+@click.option(
+    "--format",
+    "export_format",
+    default="mobi",
+    help=f"Output format ({_get_format_choices()})",
+    show_default=True,
+)
 @click.option(
     "--merge-in-langs",
     default=None,
@@ -55,7 +75,7 @@ def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
 @click.option(
     "--kindlegen-path",
     default="",
-    help="Path to kindlegen (auto-detect if empty)",
+    help="Path to kindlegen (auto-detect if empty, required for MOBI format)",
     show_default="auto-detect",
 )
 @click.option(
@@ -103,6 +123,12 @@ def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
     show_default=True,
 )
 @click.option(
+    "--compress/--no-compress",
+    default=True,
+    help="Compress StarDict dictionary file (only for StarDict format)",
+    show_default=True,
+)
+@click.option(
     "--version",
     "version",
     is_flag=True,
@@ -111,25 +137,27 @@ def _show_config_default(key: str, *, empty_label: str = '"" (empty)') -> str:
     nargs=1,
 )
 @click.pass_context
-def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
+def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912,ARG001
     ctx: click.Context,
     in_lang: str | None,
     out_lang: str | None,
+    export_format: str,
     merge_in_langs: str | None,
     title: str,
     shortname: str,
     outdir: str,
     kindlegen_path: str,
-    max_entries: int,
+    max_entries: int,  # noqa: ARG001  # reserved for future use
     include_pos: bool | None,
     try_fix_inflections: bool | None,
     kindle_lang: str,
     cache_dir: str | None,
     reset_cache: bool,
+    compress: bool,
     version: bool,
 ) -> None:
     """
-    DictForge build a Kindle dictionary from Wiktionary (Wiktextract/Kaikki) in one go.
+    DictForge build a dictionary from Wiktionary (Wiktextract/Kaikki) in one go.
 
     Usage:
       \b
@@ -158,24 +186,56 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
             "Example: 'dictforge sr' or 'dictforge \"Serbo-Croatian\" en'",
         )
 
+    # Validate export format
+    available_formats = get_available_formats()
+    if export_format not in available_formats:
+        available_list = ", ".join(available_formats.keys())
+        raise click.UsageError(
+            f"Unknown export format '{export_format}'. Available: {available_list}",
+        )
+
     in_lang_norm = normalize_input_name(in_lang)
     out_lang_norm = normalize_input_name(out_lang) if out_lang else cfg["default_out_lang"]
 
-    config_kindlegen = str(cfg.get("kindlegen_path") or "")
-    kindlegen_input = kindlegen_path or config_kindlegen
-    kindlegen = kindlegen_input or guess_kindlegen_path()
-    if not kindlegen:
-        error_message = Text("kindlegen not found; install ", style="bold red")
-        error_message.append(
-            "Kindle Previewer 3",
-            style="link https://kdp.amazon.com/en_US/help/topic/G202131170",
-        )
-        error_message.append(" or pass --kindlegen-path", style="bold red")
-        console.print(error_message)
-        raise SystemExit(1)
+    # Build export options based on format
+    export_options: dict[str, Any] = {}
 
-    include_pos_val = cfg["include_pos"] if include_pos is None else True
-    try_fix_val = cfg["try_fix_inflections"] if try_fix_inflections is None else True
+    if export_format == "mobi":
+        # MOBI-specific setup
+        config_kindlegen = str(cfg.get("kindlegen_path") or "")
+        kindlegen_input = kindlegen_path or config_kindlegen
+        kindlegen = kindlegen_input or guess_kindlegen_path()
+        if not kindlegen:
+            error_message = Text("kindlegen not found; install ", style="bold red")
+            error_message.append(
+                "Kindle Previewer 3",
+                style="link https://kdp.amazon.com/en_US/help/topic/G202131170",
+            )
+            error_message.append(" or pass --kindlegen-path", style="bold red")
+            console.print(error_message)
+            raise SystemExit(1)
+
+        include_pos_val = cfg["include_pos"] if include_pos is None else True
+        try_fix_val = cfg["try_fix_inflections"] if try_fix_inflections is None else True
+
+        kindle_lang_code: str | None = None
+        if kindle_lang:
+            kindle_lang_name = normalize_input_name(kindle_lang)
+            kindle_lang_code, _ = lang_meta(kindle_lang_name)
+
+        export_options = {
+            "kindlegen_path": kindlegen,
+            "try_fix_inflections": try_fix_val,
+            "kindle_lang_override": kindle_lang_code,
+            "include_pos": include_pos_val,
+        }
+    elif export_format == "stardict":
+        # StarDict-specific options
+        export_options = {
+            "compress": compress,
+            "same_type_sequence": "h",  # HTML format
+        }
+
     cache_dir_val = Path(cache_dir or cfg["cache_dir"])
 
     merge_arg = merge_in_langs if merge_in_langs is not None else cfg.get("merge_in_langs", "")
@@ -184,11 +244,6 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
         if merge_arg
         else []
     )
-
-    kindle_lang_code: str | None = None
-    if kindle_lang:
-        kindle_lang_name = normalize_input_name(kindle_lang)
-        kindle_lang_code, _ = lang_meta(kindle_lang_name)
 
     dfl = make_defaults(in_lang_norm, out_lang_norm)
     title_val = title or dfl["title"]
@@ -202,7 +257,7 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
     in_langs = [in_lang_norm] + merge_list
     start_label = ", ".join(in_langs)
     console.print(
-        f"[dictforge] Starting build: {start_label} → {out_lang_norm}",
+        f"[dictforge] Starting build: {start_label} → {out_lang_norm} ({export_format})",
         style="cyan",
     )
     try:
@@ -212,11 +267,8 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
             title=title_val,
             shortname=short_val,
             outdir=outdir_path,
-            kindlegen_path=kindlegen,
-            include_pos=include_pos_val,
-            try_fix_inflections=try_fix_val,
-            max_entries=max_entries,
-            kindle_lang_override=kindle_lang_code,
+            export_format=export_format,
+            export_options=export_options,
         )
     except KaikkiDownloadError as exc:
         console.print(Text(str(exc), style="bold red"))
@@ -232,6 +284,13 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
                 "Ensure the Kindle Previewer path is correct "
                 "and that the metadata contains a valid language code."
             ),
+            style="yellow",
+        )
+        raise SystemExit(1) from exc
+    except ExportError as exc:
+        console.print(Text(str(exc), style="bold red"))
+        console.print(
+            "Export failed. Check the error message above for details.",
             style="yellow",
         )
         raise SystemExit(1) from exc
@@ -261,6 +320,9 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912
             "Check your internet connection or pre-download datasets as described in the docs.",
             style="yellow",
         )
+        raise SystemExit(1) from exc
+    except ValueError as exc:
+        console.print(Text(str(exc), style="bold red"))
         raise SystemExit(1) from exc
 
     click.secho(

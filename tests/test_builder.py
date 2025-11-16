@@ -7,10 +7,18 @@ from typing import Any
 
 import pytest
 
-from dictforge.builder import Builder, KaikkiDownloadError, KaikkiParseError, KindleBuildError
+from dictforge.builder import (
+    Builder,
+    KaikkiDownloadError,
+    KaikkiParseError,
+    KindleBuildError,
+    get_available_formats,
+)
 from dictforge.kindle import kindle_lang_code
 from dictforge.source_base import DictionarySource
 from dictforge.source_kaikki import KaikkiSource, META_SUFFIX
+from dictforge.export_mobi import MobiExportFormat
+from dictforge.export_stardict import StarDictExportFormat
 from rich.console import Console
 
 
@@ -22,6 +30,11 @@ def builder(tmp_path: Path) -> Builder:
 @pytest.fixture
 def kaikki_source(builder: Builder) -> KaikkiSource:
     return builder._sources[0]
+
+
+@pytest.fixture
+def mobi_exporter(tmp_path: Path) -> MobiExportFormat:
+    return MobiExportFormat(cache_dir=tmp_path, show_progress=False)
 
 
 def test_entry_has_content_with_gloss(kaikki_source: KaikkiSource) -> None:
@@ -427,7 +440,9 @@ def test_kindle_lang_code_variants() -> None:
         kindle_lang_code("sr", override="unsupported")
 
 
-def test_ensure_opf_languages_updates_metadata(builder: Builder, tmp_path: Path) -> None:
+def test_ensure_opf_languages_updates_metadata(
+    mobi_exporter: MobiExportFormat, tmp_path: Path
+) -> None:
     opf_path = tmp_path / "content.opf"
     opf_path.write_text(
         """
@@ -447,7 +462,7 @@ def test_ensure_opf_languages_updates_metadata(builder: Builder, tmp_path: Path)
         encoding="utf-8",
     )
 
-    builder._ensure_opf_languages(opf_path, "sr", "en-us", "New Title")
+    mobi_exporter._ensure_opf_languages(opf_path, "sr", "en-us", "New Title")
 
     content = opf_path.read_text(encoding="utf-8")
     assert "sr" in content
@@ -455,22 +470,22 @@ def test_ensure_opf_languages_updates_metadata(builder: Builder, tmp_path: Path)
     assert "New Title" in content
 
 
-def test_run_kindlegen_success(builder: Builder, monkeypatch) -> None:
+def test_run_kindlegen_success(mobi_exporter: MobiExportFormat, monkeypatch) -> None:
     monkeypatch.setattr(
         "subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    builder._run_kindlegen("/usr/bin/kindlegen", Path("/tmp/content.opf"))
+    mobi_exporter._run_kindlegen("/usr/bin/kindlegen", Path("/tmp/content.opf"))
 
 
-def test_run_kindlegen_failure(builder: Builder, monkeypatch) -> None:
+def test_run_kindlegen_failure(mobi_exporter: MobiExportFormat, monkeypatch) -> None:
     monkeypatch.setattr(
         "subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="out", stderr="err"),
     )
 
     with pytest.raises(KindleBuildError) as exc:
-        builder._run_kindlegen("/usr/bin/kindlegen", Path("/tmp/content.opf"))
+        mobi_exporter._run_kindlegen("/usr/bin/kindlegen", Path("/tmp/content.opf"))
     assert "out" in str(exc.value)
     assert "err" in str(exc.value)
 
@@ -519,31 +534,31 @@ class DummyCreator:
 
 
 def test_export_one_success(builder: Builder, monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("dictforge.builder.DictionaryCreator", DummyCreator)
+    monkeypatch.setattr("dictforge.export_mobi.DictionaryCreator", DummyCreator)
     lang_file = tmp_path / "l.jsonl"
     lang_file.write_text("{}\n", encoding="utf-8")
 
     outdir = tmp_path / "out"
     outdir.mkdir()
+
+    mobi_format = MobiExportFormat(cache_dir=tmp_path, show_progress=False)
     count = builder._export_one(
         "Serbian",
         "English",
         outdir,
-        "kindlegen",
         "Title",
-        "Short",
-        True,
-        True,
-        0,
         lang_file,
         2,
-        None,
+        mobi_format,
+        {"kindlegen_path": "kindlegen", "try_fix_inflections": True},
     )
     assert count == 2
 
 
-def test_export_one_fallback_runs_kindlegen(builder: Builder, monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("dictforge.builder.DictionaryCreator", DummyCreator)
+def test_export_one_fallback_runs_kindlegen(
+    mobi_exporter: MobiExportFormat, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("dictforge.export_mobi.DictionaryCreator", DummyCreator)
     base_file = tmp_path / "base.jsonl"
     base_file.write_text("{}\n", encoding="utf-8")
 
@@ -551,27 +566,23 @@ def test_export_one_fallback_runs_kindlegen(builder: Builder, monkeypatch, tmp_p
         mobi_dir = opf_path.parent
         (mobi_dir / "content.mobi").write_bytes(b"data")
 
-    monkeypatch.setattr(builder, "_run_kindlegen", fake_run)
+    monkeypatch.setattr(mobi_exporter, "_run_kindlegen", fake_run)
 
     outdir = tmp_path / "out"
     outdir.mkdir()
 
-    count = builder._export_one(
-        "Serbian",
-        "English",
-        outdir,
-        "trigger-fallback",
-        "Title",
-        "Short",
-        True,
-        True,
-        0,
-        base_file,
-        1,
-        None,
+    output_path = mobi_exporter.export(
+        entries_file=base_file,
+        entry_count=1,
+        in_lang="Serbian",
+        out_lang="English",
+        outdir=outdir,
+        title="Title",
+        kindlegen_path="trigger-fallback",
+        try_fix_inflections=True,
     )
-    assert count == 1
-    assert (outdir / "Serbian-English.mobi").exists()
+    assert output_path.exists()
+    assert output_path.name == "Serbian-English.mobi"
 
 
 def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_path: Path) -> None:
@@ -583,20 +594,16 @@ def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_p
         return (data_path, 3) if language == "Serbian" else (data_path, 1)
 
     def fake_export(
-        language: str,
+        in_lang: str,
         out_lang: str,
         outdir: Path,
-        kindlegen_path: str,
         title: str,
-        shortname: str,
-        include_pos: bool,
-        try_fix_inflections: bool,
-        max_entries: int,
         language_file: Path,
         entry_count: int,
-        kindle_lang_override: str | None = None,
+        export_format: Any,
+        export_options: dict,
     ) -> int:
-        calls.append((language, out_lang, outdir, language_file, entry_count))
+        calls.append((in_lang, out_lang, outdir, language_file, entry_count))
         return entry_count
 
     monkeypatch.setattr(builder, "_prepare_combined_entries", fake_prepare)
@@ -608,10 +615,8 @@ def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_p
         title="Title",
         shortname="Short",
         outdir=tmp_path,
-        kindlegen_path="kindle",
-        include_pos=True,
-        try_fix_inflections=True,
-        max_entries=0,
+        export_format="stardict",
+        export_options={},
     )
 
     assert counts == {"Serbian": 3, "Croatian": 1}
@@ -619,6 +624,50 @@ def test_build_dictionary_invokes_for_merge(builder: Builder, monkeypatch, tmp_p
     assert calls[0][4] == 3
     assert calls[1][0] == "Croatian"
     assert calls[1][4] == 1
+
+
+def test_get_available_formats() -> None:
+    formats = get_available_formats()
+    assert "mobi" in formats
+    assert "stardict" in formats
+    assert formats["mobi"] == MobiExportFormat
+    assert formats["stardict"] == StarDictExportFormat
+
+
+def test_stardict_export_creates_files(tmp_path: Path) -> None:
+    exporter = StarDictExportFormat(show_progress=False)
+    entries_file = tmp_path / "entries.jsonl"
+    entries_file.write_text(
+        json.dumps({"word": "test", "senses": [{"glosses": ["meaning"]}]}) + "\n",
+        encoding="utf-8",
+    )
+
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+
+    output_path = exporter.export(
+        entries_file=entries_file,
+        entry_count=1,
+        in_lang="Serbian",
+        out_lang="English",
+        outdir=outdir,
+        title="Test Dictionary",
+        compress=False,
+    )
+
+    assert output_path.exists()
+    assert output_path.suffix == ".ifo"
+
+    # Check that all StarDict files are created
+    dict_dir = output_path.parent
+    assert (dict_dir / output_path.stem).with_suffix(".idx").exists()
+    assert (dict_dir / output_path.stem).with_suffix(".dict").exists()
+
+    # Check .ifo content
+    ifo_content = output_path.read_text(encoding="utf-8")
+    assert "StarDict's dict ifo file" in ifo_content
+    assert "wordcount=1" in ifo_content
+    assert "Test Dictionary" in ifo_content
 
 
 def test_kaikki_parse_error_extracts_excerpt(tmp_path: Path) -> None:
