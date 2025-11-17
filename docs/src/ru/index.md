@@ -7,11 +7,12 @@
 [Установите утилиту](installation.md)
 
 ```bash
-dictforge --kindlegen-path "/Applications/Kindle Previewer 3.app/Contents/lib/fc/bin/kindlegen" sr en
+dictforge sr en
 ```
 
 - При первом запуске dictforge скачивает дамп Викисловаря (≈20 ГБ в сжатом виде); последующие запуски используют его повторно.
 - Пример команды собирает сербско-хорватский → английский словарь в каталоге `build/`.
+- По умолчанию словарь экспортируется в формате MOBI для Kindle. Используйте `--format stardict` для формата StarDict.
 - Скопируйте полученный MOBI-файл в `Documents/Dictionaries/` на Kindle либо в `Documents/`, если каталога `Dictionaries` нет.
 - Во время чтения зажмите слово, чтобы открыть словарь. Поскольку Kindle не поддерживает некоторые языки, например сербский,
   при первом использовании выберите словарь вручную через `Dictionary` → `Select new dictionary`.
