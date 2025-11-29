@@ -15,6 +15,7 @@ import requests
 
 from .kaikki_utils import get_freedict_code
 from .source_base import DictionarySource
+from .translit import cyr_to_lat
 
 FREEDICT_BASE_URL = "https://download.freedict.org/dictionaries"
 FREEDICT_CACHE_DIR = "freedict"
@@ -46,72 +47,6 @@ class FreeDictChainError(RuntimeError):
 
 class FreeDictSource(DictionarySource):
     """Access and prepare FreeDict dictionaries in StarDict format."""
-
-    # Serbian Cyrillic to Latin transliteration mapping
-    CYRILLIC_TO_LATIN = {
-        # Lowercase
-        "а": "a",
-        "б": "b",
-        "в": "v",
-        "г": "g",
-        "д": "d",
-        "ђ": "đ",
-        "е": "e",
-        "ж": "ž",
-        "з": "z",
-        "и": "i",
-        "ј": "j",
-        "к": "k",
-        "л": "l",
-        "љ": "lj",
-        "м": "m",
-        "н": "n",
-        "њ": "nj",
-        "о": "o",
-        "п": "p",
-        "р": "r",
-        "с": "s",
-        "т": "t",
-        "ћ": "ć",
-        "у": "u",
-        "ф": "f",
-        "х": "h",
-        "ц": "c",
-        "ч": "č",
-        "џ": "dž",
-        "ш": "š",
-        # Uppercase
-        "А": "A",
-        "Б": "B",
-        "В": "V",
-        "Г": "G",
-        "Д": "D",
-        "Ђ": "Đ",
-        "Е": "E",
-        "Ж": "Ž",
-        "З": "Z",
-        "И": "I",
-        "Ј": "J",
-        "К": "K",
-        "Л": "L",
-        "Љ": "Lj",
-        "М": "M",
-        "Н": "N",
-        "Њ": "Nj",
-        "О": "O",
-        "П": "P",
-        "Р": "R",
-        "С": "S",
-        "Т": "T",
-        "Ћ": "Ć",
-        "У": "U",
-        "Ф": "F",
-        "Х": "H",
-        "Ц": "C",
-        "Ч": "Č",
-        "Џ": "Dž",
-        "Ш": "Š",
-    }
 
     # Language pairs that should be auto-merged
     RELATED_LANGUAGES = {
@@ -182,35 +117,27 @@ class FreeDictSource(DictionarySource):
 
         return entries_path, count
 
-    def _transliterate_serbian_cyrillic(self, text: str) -> str:
-        """Convert Serbian Cyrillic to Latin script.
-
-        Uses the standard Serbian Cyrillic→Latin mapping including
-        special digraphs (Љ→Lj, Њ→Nj, Џ→Dž).
-        """
-        return "".join(self.CYRILLIC_TO_LATIN.get(c, c) for c in text)
-
     def _apply_transliteration(self, entry: dict[str, Any], lang: str) -> dict[str, Any]:
         """Apply transliteration to entry if needed.
 
         For Serbian dictionaries:
-        - Transliterate both 'word' and 'glosses' fields
+        - Transliterate both 'word' and 'glosses' fields from Cyrillic to Latin.
         """
         if lang != "Serbian":
             return entry
 
         # Transliterate word
         if "word" in entry:
-            entry["word"] = self._transliterate_serbian_cyrillic(entry["word"])
+            entry["word"] = cyr_to_lat(entry["word"])
 
         # Transliterate glosses in all senses
         for sense in entry.get("senses", []):
             if "glosses" in sense:
                 glosses = sense["glosses"]
                 if isinstance(glosses, list):
-                    sense["glosses"] = [self._transliterate_serbian_cyrillic(g) for g in glosses]
+                    sense["glosses"] = [cyr_to_lat(g) for g in glosses]
                 elif isinstance(glosses, str):
-                    sense["glosses"] = self._transliterate_serbian_cyrillic(glosses)
+                    sense["glosses"] = cyr_to_lat(glosses)
 
         return entry
 

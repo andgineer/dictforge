@@ -12,6 +12,7 @@ pytest-coverage.txt
 *.py-e
 .venv/
 .wiktex-cache/
+.uv-cache/
 build/
 **/_mkdocs.yml*
 **/ru/images/
