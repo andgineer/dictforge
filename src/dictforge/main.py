@@ -1,8 +1,10 @@
 import sys
+from functools import partial
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+import requests
 import rich_click as click
 from rich.console import Console
 from rich.text import Text
@@ -20,6 +22,8 @@ from .config import DEFAULTS, config_path, load_config, save_config
 from .export_base import ExportError
 from .kaikki_utils import lang_meta, make_defaults, normalize_input_name
 from .kindlegen import guess_kindlegen_path
+from .progress_bar import progress_bar
+from .source_freedict import FreeDictSource
 
 # rich-click styling
 click.rich_click.TEXT_MARKUP = "rich"
@@ -269,12 +273,7 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912,ARG001
     # Handle FreeDict options
     if freedict_only:
         # Use only FreeDict source
-        from functools import partial
-
-        from .progress_bar import progress_bar
-        from .source_freedict import FreeDictSource
-
-        session = __import__("requests").Session()
+        session = requests.Session()
         show_progress_val = True
         console_inst = Console(stderr=True, force_terminal=show_progress_val)
         progress_factory = partial(

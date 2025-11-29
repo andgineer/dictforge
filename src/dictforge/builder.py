@@ -20,6 +20,7 @@ from .export_stardict import StarDictExportFormat
 from .kindle import KindleBuildError  # noqa: F401
 from .progress_bar import progress_bar
 from .source_base import DictionarySource
+from .source_freedict import FreeDictSource
 from .source_kaikki import KaikkiDownloadError, KaikkiParseError, KaikkiSource
 
 
@@ -61,11 +62,9 @@ class Builder:
                 session=self.session,
                 progress_factory=self._progress_factory,
             )
-            sources_list = [kaikki_source]
+            sources_list: list[DictionarySource] = [kaikki_source]
 
             if enable_freedict:
-                from .source_freedict import FreeDictSource
-
                 self._console.print("[dictforge] Initializing FreeDict source", style="cyan")
                 freedict_source = FreeDictSource(
                     cache_dir=self.cache_dir,
@@ -79,7 +78,11 @@ class Builder:
         else:
             self._sources = list(sources)
 
-    def _prepare_combined_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:  # noqa: C901
+    def _prepare_combined_entries(  # noqa: C901, PLR0912
+        self,
+        in_lang: str,
+        out_lang: str,
+    ) -> tuple[Path, int]:
         """Aggregate entries from each configured source, merging senses/examples by word."""
         if len(self._sources) == 1:
             source = self._sources[0]
@@ -152,8 +155,8 @@ class Builder:
         self,
         target: dict[str, Any],
         incoming: dict[str, Any],
-        target_source: str = "unknown",
-        incoming_source: str = "unknown",
+        target_source: str = "unknown",  # noqa: ARG002
+        incoming_source: str = "unknown",  # noqa: ARG002
     ) -> None:
         """Combine senses/examples from ``incoming`` into ``target`` without duplicates.
 

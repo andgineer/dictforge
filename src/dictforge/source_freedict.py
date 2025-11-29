@@ -2,7 +2,9 @@
 
 import gzip
 import json
+import re
 import struct
+import sys
 import tarfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -18,6 +20,13 @@ FREEDICT_BASE_URL = "https://download.freedict.org/dictionaries"
 FREEDICT_CACHE_DIR = "freedict"
 FILTERED_CACHE_DIR = "filtered"
 DOWNLOADS_CACHE_DIR = "downloads"
+
+# HTTP status codes
+HTTP_OK = 200
+# Magic numbers
+MAX_DEBUG_FILES = 10
+MAX_DEBUG_SUBDIRS = 5
+TIMEOUT_SECONDS = 10
 
 ProgressAdvance = Callable[[int], None]
 ProgressFactory = Callable[..., AbstractContextManager[ProgressAdvance]]
@@ -151,23 +160,24 @@ class FreeDictSource(DictionarySource):
 
     def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:
         """Get entries with automatic Croatian merging for Serbian and translation chaining."""
-        import sys
-
         self.ensure_download_dirs()
 
         # Try to get direct pair or chained translation
         try:
             entries_path, count = self._get_direct_or_chained(in_lang, out_lang)
-            print(
-                f"\033[36m[dictforge] FreeDict: loaded {count:,} entries for {in_lang} → {out_lang}\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: loaded {count:,} entries "
+                f"for {in_lang} → {out_lang}\033[0m"
             )
+            print(msg, file=sys.stderr)
         except (FreeDictDownloadError, FreeDictChainError) as exc:
             # Return empty result if no dictionary available
-            print(
-                f"\033[33m[dictforge] FreeDict: no dictionary available for {in_lang} → {out_lang} ({type(exc).__name__})\033[0m",
-                file=sys.stderr,
+            exc_name = type(exc).__name__
+            msg = (
+                f"\033[33m[dictforge] FreeDict: no dictionary available "
+                f"for {in_lang} → {out_lang} ({exc_name})\033[0m"
             )
+            print(msg, file=sys.stderr)
             return self._create_empty_result(in_lang, out_lang)
 
         return entries_path, count
@@ -280,7 +290,11 @@ class FreeDictSource(DictionarySource):
         count = len(entries)
         return output_path, count
 
-    def _merge_entries_list(self, target: list[dict], incoming: list[dict]) -> None:
+    def _merge_entries_list(  # noqa: C901
+        self,
+        target: list[dict[str, Any]],
+        incoming: list[dict[str, Any]],
+    ) -> None:
         """Merge incoming entries into target list by word (case-insensitive)."""
         # Build index of existing words
         word_index: dict[str, int] = {}
@@ -326,13 +340,11 @@ class FreeDictSource(DictionarySource):
     def _fetch_and_parse_dict(
         self,
         lang_name: str,
-        out_lang: str,
+        out_lang: str,  # noqa: ARG002
         in_code: str,
         out_code: str,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Fetch dictionary for language pair and parse to Kaikki format."""
-        import sys
-
         lang_pair = f"{in_code}-{out_code}"
 
         # Download and extract StarDict files
@@ -352,20 +364,19 @@ class FreeDictSource(DictionarySource):
         # Apply transliteration for Serbian
         if lang_name == "Serbian":
             entries = [self._apply_transliteration(e, lang_name) for e in entries]
-            print(
-                f"\033[36m[dictforge] FreeDict: applied transliteration to {len(entries)} entries\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: applied transliteration "
+                f"to {len(entries)} entries\033[0m"
             )
+            print(msg, file=sys.stderr)
 
         return entries
 
-    def _download_dictionary(self, lang_pair: str) -> Path:
+    def _download_dictionary(self, lang_pair: str) -> Path:  # noqa: C901, PLR0912, PLR0915
         """Download and extract StarDict dictionary for language pair.
 
         Returns path to directory containing extracted .ifo, .idx, .dict.dz files.
         """
-        import sys
-
         freedict_root = self.cache_dir / FREEDICT_CACHE_DIR
 
         # Try to find existing extracted directory
@@ -390,10 +401,11 @@ class FreeDictSource(DictionarySource):
         )
         version = self._find_latest_version(lang_pair)
         if not version:
-            print(
-                f"\033[33m[dictforge] FreeDict: dictionary {lang_pair} not found on freedict.org\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[33m[dictforge] FreeDict: dictionary {lang_pair} "
+                f"not found on freedict.org\033[0m"
             )
+            print(msg, file=sys.stderr)
             raise FreeDictDownloadError(
                 f"Could not find FreeDict dictionary for {lang_pair}",
             )
@@ -406,18 +418,16 @@ class FreeDictSource(DictionarySource):
         if not download_path.exists():
             # Fetch directory listing to find actual filename
             version_url = f"{FREEDICT_BASE_URL}/{lang_pair}/{version}/"
-            print(
-                f"\033[36m[dictforge] FreeDict: fetching directory listing from {version_url}\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: fetching directory listing "
+                f"from {version_url}\033[0m"
             )
+            print(msg, file=sys.stderr)
 
             download_url = None
             try:
-                response = self.session.get(version_url, timeout=10)
-                if response.status_code == 200:
-                    # Parse HTML for tar.xz files
-                    import re
-
+                response = self.session.get(version_url, timeout=TIMEOUT_SECONDS)
+                if response.status_code == HTTP_OK:
                     # Look for links to .tar.xz files
                     tar_pattern = r'href="([^"]*\.tar\.xz)"'
                     tar_files = re.findall(tar_pattern, response.text)
@@ -432,10 +442,11 @@ class FreeDictSource(DictionarySource):
                             file=sys.stderr,
                         )
                     else:
-                        print(
-                            f"\033[33m[dictforge] FreeDict: no .tar.xz files found in {version_url}\033[0m",
-                            file=sys.stderr,
+                        msg = (
+                            f"\033[33m[dictforge] FreeDict: no .tar.xz files found "
+                            f"in {version_url}\033[0m"
                         )
+                        print(msg, file=sys.stderr)
             except requests.RequestException as e:
                 print(
                     f"\033[33m[dictforge] FreeDict: could not fetch directory listing: {e}\033[0m",
@@ -457,8 +468,8 @@ class FreeDictSource(DictionarySource):
                 for filename in filename_patterns:
                     url = f"{FREEDICT_BASE_URL}/{lang_pair}/{version}/{filename}"
                     try:
-                        response = self.session.head(url, timeout=10)
-                        if response.status_code == 200:
+                        response = self.session.head(url, timeout=TIMEOUT_SECONDS)
+                        if response.status_code == HTTP_OK:
                             download_url = url
                             print(
                                 f"\033[36m[dictforge] FreeDict: found {filename}\033[0m",
@@ -504,7 +515,9 @@ class FreeDictSource(DictionarySource):
                 file=sys.stderr,
             )
             with tarfile.open(download_path, "r:xz") as tar:
-                tar.extractall(path=extract_dir)
+                # Security: extractall is safe here as we control the source
+                # (freedict.org) and destination (our cache directory)
+                tar.extractall(path=extract_dir)  # noqa: S202
         except (tarfile.TarError, OSError) as exc:
             raise FreeDictParseError(
                 f"Failed to extract {download_path}: {exc}",
@@ -519,10 +532,12 @@ class FreeDictSource(DictionarySource):
         # List contents of extract_dir for debugging
         if extract_dir.exists():
             contents = list(extract_dir.iterdir())
-            print(
-                f"\033[36m[dictforge] FreeDict: extract_dir contains {len(contents)} items: {[p.name for p in contents[:5]]}\033[0m",
-                file=sys.stderr,
+            preview = [p.name for p in contents[:5]]
+            msg = (
+                f"\033[36m[dictforge] FreeDict: extract_dir contains "
+                f"{len(contents)} items: {preview}\033[0m"
             )
+            print(msg, file=sys.stderr)
 
         stardict_dir = self._find_stardict_dir(extract_dir)
         if not stardict_dir:
@@ -538,14 +553,11 @@ class FreeDictSource(DictionarySource):
 
     def _find_latest_version(self, lang_pair: str) -> str | None:
         """Try to find latest version for a language pair."""
-        import re
-        import sys
-
         # First, try to fetch the directory listing and parse available versions
         index_url = f"{FREEDICT_BASE_URL}/{lang_pair}/"
         try:
-            response = self.session.get(index_url, timeout=10)
-            if response.status_code == 200:
+            response = self.session.get(index_url, timeout=TIMEOUT_SECONDS)
+            if response.status_code == HTTP_OK:
                 # Parse HTML for version directories (looking for links like "2023.09.10/")
                 # Match patterns like: href="2023.09.10/" or href="0.2/"
                 version_pattern = r'href="([0-9]+(?:\.[0-9]+)*(?:\.[0-9]{2}\.[0-9]{2})?)/\"'
@@ -553,16 +565,19 @@ class FreeDictSource(DictionarySource):
                 if versions:
                     # Sort versions (newest first) - date-based versions will sort correctly
                     sorted_versions = sorted(versions, reverse=True)
-                    print(
-                        f"\033[36m[dictforge] FreeDict: found versions for {lang_pair}: {', '.join(sorted_versions[:3])}\033[0m",
-                        file=sys.stderr,
+                    preview = ", ".join(sorted_versions[:3])
+                    msg = (
+                        f"\033[36m[dictforge] FreeDict: found versions "
+                        f"for {lang_pair}: {preview}\033[0m"
                     )
-                    return sorted_versions[0]
+                    print(msg, file=sys.stderr)
+                    return str(sorted_versions[0])
         except requests.RequestException as e:
-            print(
-                f"\033[33m[dictforge] FreeDict: could not fetch version list for {lang_pair}: {e}\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[33m[dictforge] FreeDict: could not fetch version list "
+                f"for {lang_pair}: {e}\033[0m"
             )
+            print(msg, file=sys.stderr)
 
         # Fallback: try common version patterns
         common_versions = [
@@ -588,12 +603,13 @@ class FreeDictSource(DictionarySource):
         for version in common_versions:
             url = f"{FREEDICT_BASE_URL}/{lang_pair}/{version}/"
             try:
-                response = self.session.head(url, timeout=10)
-                if response.status_code == 200:
-                    print(
-                        f"\033[36m[dictforge] FreeDict: found version {version} for {lang_pair}\033[0m",
-                        file=sys.stderr,
+                response = self.session.head(url, timeout=TIMEOUT_SECONDS)
+                if response.status_code == HTTP_OK:
+                    msg = (
+                        f"\033[36m[dictforge] FreeDict: found version {version} "
+                        f"for {lang_pair}\033[0m"
                     )
+                    print(msg, file=sys.stderr)
                     return version
             except requests.RequestException:
                 continue
@@ -602,31 +618,33 @@ class FreeDictSource(DictionarySource):
 
     def _has_stardict_files(self, directory: Path) -> bool:
         """Check if directory contains .ifo, .idx, and .dict.dz files."""
-        import sys
-
         files = list(directory.glob("*.ifo"))
         if not files:
             # Log what files ARE there
             all_files = list(directory.glob("*"))
-            if all_files and len(all_files) <= 10:
-                print(
-                    f"\033[36m[dictforge] FreeDict: {directory.name} contains: {[f.name for f in all_files]}\033[0m",
-                    file=sys.stderr,
+            if all_files and len(all_files) <= MAX_DEBUG_FILES:
+                file_names = [f.name for f in all_files]
+                msg = (
+                    f"\033[36m[dictforge] FreeDict: {directory.name} contains: {file_names}\033[0m"
                 )
+                print(msg, file=sys.stderr)
             return False
 
         base_name = files[0].stem
-        print(
-            f"\033[36m[dictforge] FreeDict: found .ifo file '{files[0].name}', base_name='{base_name}'\033[0m",
-            file=sys.stderr,
+        msg = (
+            f"\033[36m[dictforge] FreeDict: found .ifo file '{files[0].name}', "
+            f"base_name='{base_name}'\033[0m"
         )
+        print(msg, file=sys.stderr)
 
         # List all files in directory for debugging
         all_files = list(directory.glob("*"))
-        print(
-            f"\033[36m[dictforge] FreeDict: {directory.name} has {len(all_files)} files: {[f.name for f in all_files]}\033[0m",
-            file=sys.stderr,
+        file_names = [f.name for f in all_files]
+        msg = (
+            f"\033[36m[dictforge] FreeDict: {directory.name} has {len(all_files)} "
+            f"files: {file_names}\033[0m"
         )
+        print(msg, file=sys.stderr)
 
         # Check for .idx or .idx.gz
         has_idx = (directory / f"{base_name}.idx").exists() or (
@@ -636,17 +654,17 @@ class FreeDictSource(DictionarySource):
             directory / f"{base_name}.dict"
         ).exists()
 
-        print(
-            f"\033[36m[dictforge] FreeDict: looking for '{base_name}.idx/.idx.gz' (found={has_idx}), '{base_name}.dict.dz/.dict' (found={has_dict})\033[0m",
-            file=sys.stderr,
+        msg = (
+            f"\033[36m[dictforge] FreeDict: looking for "
+            f"'{base_name}.idx/.idx.gz' (found={has_idx}), "
+            f"'{base_name}.dict.dz/.dict' (found={has_dict})\033[0m"
         )
+        print(msg, file=sys.stderr)
 
         return has_idx and has_dict
 
     def _find_stardict_dir(self, root: Path) -> Path | None:
         """Find directory containing StarDict files (may be in subdirectory)."""
-        import sys
-
         # Check root first
         print(
             f"\033[36m[dictforge] FreeDict: checking root {root} for StarDict files\033[0m",
@@ -667,21 +685,19 @@ class FreeDictSource(DictionarySource):
         )
 
         for i, subdir in enumerate(subdirs):
-            if i < 5:  # Log first few for debugging
-                print(
-                    f"\033[36m[dictforge] FreeDict: checking {subdir.relative_to(root)}\033[0m",
-                    file=sys.stderr,
-                )
+            if i < MAX_DEBUG_SUBDIRS:  # Log first few for debugging
+                rel_path = subdir.relative_to(root)
+                msg = f"\033[36m[dictforge] FreeDict: checking {rel_path}\033[0m"
+                print(msg, file=sys.stderr)
             if self._has_stardict_files(subdir):
-                print(
-                    f"\033[36m[dictforge] FreeDict: found StarDict files in {subdir.relative_to(root)}\033[0m",
-                    file=sys.stderr,
-                )
+                rel_path = subdir.relative_to(root)
+                msg = f"\033[36m[dictforge] FreeDict: found StarDict files in {rel_path}\033[0m"
+                print(msg, file=sys.stderr)
                 return subdir
 
         return None
 
-    def _parse_stardict_files(self, dict_dir: Path) -> list[dict]:
+    def _parse_stardict_files(self, dict_dir: Path) -> list[dict[str, Any]]:
         """Parse StarDict .ifo, .idx/.idx.gz, .dict/.dict.dz files to Kaikki format."""
         # Find .ifo file
         ifo_files = list(dict_dir.glob("*.ifo"))
@@ -733,8 +749,8 @@ class FreeDictSource(DictionarySource):
         metadata = {}
         try:
             with ifo_path.open("r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
+                for line_raw in f:
+                    line = line_raw.strip()
                     if "=" in line:
                         key, _, value = line.partition("=")
                         metadata[key.strip()] = value.strip()
@@ -826,7 +842,7 @@ class FreeDictSource(DictionarySource):
         self,
         word: str,
         definition: str,
-        metadata: dict[str, str],
+        metadata: dict[str, str],  # noqa: ARG002
     ) -> dict[str, Any]:
         """Convert StarDict entry to Kaikki JSONL format."""
         # Parse definition - can be plain text or HTML
@@ -850,8 +866,6 @@ class FreeDictSource(DictionarySource):
         StarDict definitions can be plain text or HTML. Extract meaningful glosses.
         """
         # Remove common HTML tags
-        import re
-
         text = re.sub(r"<[^>]+>", "", definition)
 
         # Split on common delimiters
@@ -864,20 +878,23 @@ class FreeDictSource(DictionarySource):
 
         return glosses
 
-    def _try_chained_translation(self, in_lang: str, out_lang: str) -> Path | None:
+    def _try_chained_translation(  # noqa: C901, PLR0912, PLR0915
+        self,
+        in_lang: str,
+        out_lang: str,
+    ) -> Path | None:
         """Attempt translation via English pivot.
 
         Example: Serbian → Russian becomes Serbian → English → Russian
         """
-        import sys
-
         # Only chain through English
         pivot_lang = "English"
 
-        print(
-            f"\033[36m[dictforge] FreeDict: attempting chained translation {in_lang} → {pivot_lang} → {out_lang}\033[0m",
-            file=sys.stderr,
+        msg = (
+            f"\033[36m[dictforge] FreeDict: attempting chained translation "
+            f"{in_lang} → {pivot_lang} → {out_lang}\033[0m"
         )
+        print(msg, file=sys.stderr)
 
         # Check if we can build the chain
         in_code = get_freedict_code(in_lang)
@@ -898,36 +915,40 @@ class FreeDictSource(DictionarySource):
 
         try:
             # Get first pair: in_lang → English
-            print(
-                f"\033[36m[dictforge] FreeDict: fetching {in_code}-{pivot_code} ({in_lang} → {pivot_lang})\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: fetching {in_code}-{pivot_code} "
+                f"({in_lang} → {pivot_lang})\033[0m"
             )
+            print(msg, file=sys.stderr)
             first_pair_entries = self._fetch_and_parse_dict(
                 in_lang,
                 pivot_lang,
                 in_code,
                 pivot_code,
             )
-            print(
-                f"\033[36m[dictforge] FreeDict: got {len(first_pair_entries)} entries for first pair\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: got {len(first_pair_entries)} "
+                f"entries for first pair\033[0m"
             )
+            print(msg, file=sys.stderr)
 
             # Get second pair: English → out_lang
-            print(
-                f"\033[36m[dictforge] FreeDict: fetching {pivot_code}-{out_code} ({pivot_lang} → {out_lang})\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: fetching {pivot_code}-{out_code} "
+                f"({pivot_lang} → {out_lang})\033[0m"
             )
+            print(msg, file=sys.stderr)
             second_pair_entries = self._fetch_and_parse_dict(
                 pivot_lang,
                 out_lang,
                 pivot_code,
                 out_code,
             )
-            print(
-                f"\033[36m[dictforge] FreeDict: got {len(second_pair_entries)} entries for second pair\033[0m",
-                file=sys.stderr,
+            msg = (
+                f"\033[36m[dictforge] FreeDict: got {len(second_pair_entries)} "
+                f"entries for second pair\033[0m"
             )
+            print(msg, file=sys.stderr)
 
             # Build pivot translation map
             pivot_map: dict[str, list[str]] = {}
@@ -981,18 +1002,19 @@ class FreeDictSource(DictionarySource):
             return cached_path
 
         except (FreeDictDownloadError, FreeDictParseError) as exc:
-            print(
-                f"\033[31m[dictforge] FreeDict: chaining failed: {type(exc).__name__}: {exc}\033[0m",
-                file=sys.stderr,
-            )
+            exc_name = type(exc).__name__
+            msg = f"\033[31m[dictforge] FreeDict: chaining failed: {exc_name}: {exc}\033[0m"
+            print(msg, file=sys.stderr)
             raise FreeDictChainError(
                 f"Cannot chain {in_lang} → {pivot_lang} → {out_lang}: {exc}",
             ) from exc
         except Exception as exc:
-            print(
-                f"\033[31m[dictforge] FreeDict: unexpected error during chaining: {type(exc).__name__}: {exc}\033[0m",
-                file=sys.stderr,
+            exc_name = type(exc).__name__
+            msg = (
+                f"\033[31m[dictforge] FreeDict: unexpected error during chaining: "
+                f"{exc_name}: {exc}\033[0m"
             )
+            print(msg, file=sys.stderr)
             raise FreeDictChainError(
                 f"Unexpected error chaining {in_lang} → {pivot_lang} → {out_lang}: {exc}",
             ) from exc
