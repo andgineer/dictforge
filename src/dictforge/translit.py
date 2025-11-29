@@ -41,9 +41,10 @@ _LAT_TO_CYR = {
     "ž": "ж",
 }
 
-_CYR_TO_LAT = {value: key for key, value in _LAT_TO_CYR.items() if len(key) == 1}
-_CYR_TO_LAT.update({"ђ": "đ", "ћ": "ć", "љ": "lj", "њ": "nj", "џ": "dž"})
-_CYR_TO_LAT.update({"Ђ": "Đ", "Љ": "Lj", "Њ": "Nj", "Џ": "Dž", "Ћ": "Ć"})
+_CYR_TO_LAT = {cyr: lat for lat, cyr in _LAT_TO_CYR.items() if len(lat) == 1}
+_CYR_TO_LAT.update(
+    {cyr: lat for lat, cyr in _PAIR.items() if len(lat) > 1 and cyr not in _CYR_TO_LAT},
+)
 
 
 def lat_to_cyr(text: str) -> str:
