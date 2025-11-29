@@ -22,6 +22,7 @@ def _base_config(tmp_path: Path) -> dict[str, object]:
         "try_fix_inflections": False,
         "cache_dir": str(tmp_path / "cache"),
         "kindlegen_path": "",
+        "enable_freedict": True,
     }
 
 
@@ -67,10 +68,12 @@ def test_cli_success_path(monkeypatch, runner: CliRunner, tmp_path: Path) -> Non
             *,
             show_progress: bool | None = None,
             reset_cache: bool = False,
+            enable_freedict: bool = True,
         ) -> None:
             calls["cache_dir"] = cache_dir
             calls["show_progress"] = show_progress
             calls["reset_cache"] = reset_cache
+            calls["enable_freedict"] = enable_freedict
 
         def ensure_download_dirs(self, force: bool = False) -> None:
             calls["ensure_download_dirs"] = force
@@ -121,10 +124,12 @@ def test_cli_reset_cache_triggers_cleanup(monkeypatch, runner: CliRunner, tmp_pa
             *,
             show_progress: bool | None = None,
             reset_cache: bool = False,
+            enable_freedict: bool = True,
         ) -> None:
             calls["cache_dir"] = cache_dir
             calls["show_progress"] = show_progress
             calls["reset_cache"] = reset_cache
+            calls["enable_freedict"] = enable_freedict
 
         def ensure_download_dirs(self, force: bool = False) -> None:
             calls["ensure_download_dirs"] = force
@@ -162,10 +167,12 @@ def test_cli_download_error(monkeypatch, runner: CliRunner, tmp_path: Path) -> N
             *,
             show_progress: bool | None = None,
             reset_cache: bool = False,
+            enable_freedict: bool = True,
         ) -> None:  # pragma: no cover - trivial
             self.cache_dir = cache_dir
             self.show_progress = show_progress
             self.reset_cache = reset_cache
+            self.enable_freedict = enable_freedict
 
         def ensure_download_dirs(self, force: bool = False) -> None:  # pragma: no cover
             return

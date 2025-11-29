@@ -678,3 +678,189 @@ def test_kaikki_parse_error_extracts_excerpt(tmp_path: Path) -> None:
     error = KaikkiParseError(sample_path, exc.value)
     assert "Failed to parse Kaikki JSON" in str(error)
     assert error.excerpt == ["Error"]
+
+
+# Multi-source merging integration tests
+
+
+class MockSource(DictionarySource):
+    """Mock dictionary source for testing multi-source merging."""
+
+    def __init__(self, name: str, entries: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.name = name
+        self.entries = entries
+        self._cache_path: Path | None = None
+
+    def ensure_download_dirs(self, force: bool = False) -> None:
+        pass
+
+    def get_entries(self, in_lang: str, out_lang: str) -> tuple[Path, int]:
+        """Return path to JSONL file with mock entries."""
+        if self._cache_path is None:
+            import tempfile
+
+            fd, path = tempfile.mkstemp(suffix=".jsonl", text=True)
+            self._cache_path = Path(path)
+            with open(fd, "w", encoding="utf-8") as f:
+                for entry in self.entries:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        return self._cache_path, len(self.entries)
+
+
+def test_multi_source_priority_merge(tmp_path: Path) -> None:
+    """Test that Kaikki senses come first, FreeDict adds new ones."""
+    kaikki_entries = [{"word": "test", "senses": [{"glosses": ["meaning1"]}]}]
+    freedict_entries = [
+        {"word": "test", "senses": [{"glosses": ["meaning1"]}, {"glosses": ["meaning2"]}]}
+    ]
+
+    kaikki_source = MockSource("KaikkiSource", kaikki_entries)
+    freedict_source = MockSource("FreeDictSource", freedict_entries)
+
+    builder = Builder(
+        cache_dir=tmp_path,
+        show_progress=False,
+        sources=[kaikki_source, freedict_source],
+    )
+
+    combined_path, count = builder._prepare_combined_entries("Serbian", "English")
+
+    # Read merged entries
+    with combined_path.open("r", encoding="utf-8") as f:
+        merged = [json.loads(line) for line in f]
+
+    assert len(merged) == 1
+    assert merged[0]["word"] == "test"
+    # Kaikki sense first, then FreeDict's new sense
+    assert len(merged[0]["senses"]) == 2
+    assert merged[0]["senses"][0]["glosses"] == ["meaning1"]
+    assert merged[0]["senses"][1]["glosses"] == ["meaning2"]
+
+
+def test_multi_source_no_duplicates(tmp_path: Path) -> None:
+    """Test that duplicate senses are not added from second source."""
+    source1_entries = [
+        {"word": "hello", "senses": [{"glosses": ["greeting"]}, {"glosses": ["hi"]}]}
+    ]
+    source2_entries = [
+        {"word": "hello", "senses": [{"glosses": ["greeting"]}, {"glosses": ["salutation"]}]}
+    ]
+
+    source1 = MockSource("Source1", source1_entries)
+    source2 = MockSource("Source2", source2_entries)
+
+    builder = Builder(
+        cache_dir=tmp_path,
+        show_progress=False,
+        sources=[source1, source2],
+    )
+
+    combined_path, count = builder._prepare_combined_entries("English", "Russian")
+
+    with combined_path.open("r", encoding="utf-8") as f:
+        merged = [json.loads(line) for line in f]
+
+    assert len(merged) == 1
+    # Should have: greeting, hi (from source1), salutation (from source2)
+    # "greeting" should not be duplicated
+    assert len(merged[0]["senses"]) == 3
+    glosses_list = [s["glosses"] for s in merged[0]["senses"]]
+    assert ["greeting"] in glosses_list
+    assert ["hi"] in glosses_list
+    assert ["salutation"] in glosses_list
+
+
+def test_multi_source_case_insensitive_merge(tmp_path: Path) -> None:
+    """Test that gloss matching is case-insensitive."""
+    source1_entries = [{"word": "Test", "senses": [{"glosses": ["Example"]}]}]
+    source2_entries = [
+        {"word": "test", "senses": [{"glosses": ["example"]}, {"glosses": ["trial"]}]}
+    ]
+
+    source1 = MockSource("Source1", source1_entries)
+    source2 = MockSource("Source2", source2_entries)
+
+    builder = Builder(
+        cache_dir=tmp_path,
+        show_progress=False,
+        sources=[source1, source2],
+    )
+
+    combined_path, count = builder._prepare_combined_entries("English", "Russian")
+
+    with combined_path.open("r", encoding="utf-8") as f:
+        merged = [json.loads(line) for line in f]
+
+    assert len(merged) == 1
+    # Should have: Example (from source1), trial (from source2)
+    # "example" should not be duplicated (case-insensitive match)
+    assert len(merged[0]["senses"]) == 2
+
+
+def test_multi_source_different_words(tmp_path: Path) -> None:
+    """Test merging sources with completely different words."""
+    source1_entries = [{"word": "apple", "senses": [{"glosses": ["fruit"]}]}]
+    source2_entries = [{"word": "banana", "senses": [{"glosses": ["yellow fruit"]}]}]
+
+    source1 = MockSource("Source1", source1_entries)
+    source2 = MockSource("Source2", source2_entries)
+
+    builder = Builder(
+        cache_dir=tmp_path,
+        show_progress=False,
+        sources=[source1, source2],
+    )
+
+    combined_path, count = builder._prepare_combined_entries("English", "Russian")
+
+    with combined_path.open("r", encoding="utf-8") as f:
+        merged = [json.loads(line) for line in f]
+
+    assert len(merged) == 2
+    words = {entry["word"] for entry in merged}
+    assert words == {"apple", "banana"}
+
+
+def test_builder_with_freedict_disabled(tmp_path: Path) -> None:
+    """Test that builder works with enable_freedict=False."""
+    builder = Builder(cache_dir=tmp_path, show_progress=False, enable_freedict=False)
+
+    # Should only have KaikkiSource
+    assert len(builder._sources) == 1
+    assert type(builder._sources[0]).__name__ == "KaikkiSource"
+
+
+def test_builder_with_freedict_enabled(tmp_path: Path) -> None:
+    """Test that builder includes FreeDictSource when enabled."""
+    builder = Builder(cache_dir=tmp_path, show_progress=False, enable_freedict=True)
+
+    # Should have both KaikkiSource and FreeDictSource
+    assert len(builder._sources) == 2
+    source_names = [type(src).__name__ for src in builder._sources]
+    assert "KaikkiSource" in source_names
+    assert "FreeDictSource" in source_names
+
+
+def test_builder_freedict_only(tmp_path: Path) -> None:
+    """Test builder with only FreeDict source."""
+    from dictforge.source_freedict import FreeDictSource
+    from functools import partial
+    from dictforge.progress_bar import progress_bar
+    import requests
+
+    session = requests.Session()
+    console = Console(stderr=True, force_terminal=False)
+    progress_factory = partial(progress_bar, console=console, enabled=False)
+
+    freedict = FreeDictSource(
+        cache_dir=tmp_path,
+        session=session,
+        progress_factory=progress_factory,
+    )
+
+    builder = Builder(cache_dir=tmp_path, show_progress=False, sources=[freedict])
+
+    assert len(builder._sources) == 1
+    assert type(builder._sources[0]).__name__ == "FreeDictSource"

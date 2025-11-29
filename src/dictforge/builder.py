@@ -42,6 +42,7 @@ class Builder:
         cache_dir: Path,
         show_progress: bool | None = None,
         sources: Iterable[DictionarySource] | None = None,
+        enable_freedict: bool = True,
     ):
         """Configure cache location, HTTP session, and available dictionary sources."""
         self.cache_dir = cache_dir
@@ -55,12 +56,26 @@ class Builder:
         )
         self._sources: list[DictionarySource]
         if sources is None:
-            default_source = KaikkiSource(
+            kaikki_source = KaikkiSource(
                 cache_dir=self.cache_dir,
                 session=self.session,
                 progress_factory=self._progress_factory,
             )
-            self._sources = [default_source]
+            sources_list = [kaikki_source]
+
+            if enable_freedict:
+                from .source_freedict import FreeDictSource
+
+                self._console.print("[dictforge] Initializing FreeDict source", style="cyan")
+                freedict_source = FreeDictSource(
+                    cache_dir=self.cache_dir,
+                    session=self.session,
+                    progress_factory=self._progress_factory,
+                )
+                sources_list.append(freedict_source)
+                self._console.print("[dictforge] FreeDict source enabled", style="cyan")
+
+            self._sources = sources_list
         else:
             self._sources = list(sources)
 
@@ -80,7 +95,10 @@ class Builder:
         combined_path = combined_dir / filename
 
         merged_entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        entry_sources: dict[str, list[str]] = {}  # Track which sources contributed to each entry
+
         for source in self._sources:
+            source_name = type(source).__name__
             data_path, _ = source.get_entries(in_lang, out_lang)
             source.log_filter_stats(in_lang, self._console)
             try:
@@ -101,8 +119,16 @@ class Builder:
                         key = word.lower()
                         if key not in merged_entries:
                             merged_entries[key] = copy.deepcopy(entry)
+                            entry_sources[key] = [source_name]
                         else:
-                            self._merge_entry(merged_entries[key], entry)
+                            self._merge_entry(
+                                merged_entries[key],
+                                entry,
+                                target_source=entry_sources[key][0],
+                                incoming_source=source_name,
+                            )
+                            if source_name not in entry_sources[key]:
+                                entry_sources[key].append(source_name)
             except OSError as exc:
                 raise KaikkiDownloadError(
                     f"Failed to read source dataset '{data_path}': {exc}",
@@ -115,34 +141,62 @@ class Builder:
 
         with combined_path.open("w", encoding="utf-8") as dst:
             for entry in merged_entries.values():
+                # Ensure entry has required 'pos' field (some sources may not provide it)
+                if "pos" not in entry:
+                    entry["pos"] = "noun"  # Default POS when not provided
                 dst.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         return combined_path, len(merged_entries)
 
-    def _merge_entry(self, target: dict[str, Any], incoming: dict[str, Any]) -> None:
-        """Combine senses/examples from ``incoming`` into ``target`` without duplicates."""
+    def _merge_entry(
+        self,
+        target: dict[str, Any],
+        incoming: dict[str, Any],
+        target_source: str = "unknown",
+        incoming_source: str = "unknown",
+    ) -> None:
+        """Combine senses/examples from ``incoming`` into ``target`` without duplicates.
+
+        With priority-based merging:
+        - Keeps all target senses first
+        - Adds incoming senses only if they provide new meanings (different glosses)
+        - Merges examples for matching senses
+        """
         target_senses = target.get("senses")
         incoming_senses = incoming.get("senses")
         if not isinstance(target_senses, list) or not isinstance(incoming_senses, list):
             return
 
-        index: dict[tuple[str, ...], dict[str, Any]] = {}
+        # Build index of existing glosses (case-insensitive for better matching)
+        existing_glosses: set[tuple[str, ...]] = set()
+        sense_index: dict[tuple[str, ...], dict[str, Any]] = {}
+
         for sense in target_senses:
             if not isinstance(sense, dict):
                 continue
             glosses = sense.get("glosses")
             if isinstance(glosses, list) and glosses:
-                key = tuple(str(g) for g in glosses)
-                index[key] = sense
+                key = tuple(str(g).lower().strip() for g in glosses)
+                existing_glosses.add(key)
+                sense_index[key] = sense
 
+        # Add or merge incoming senses
         for sense in incoming_senses:
             if not isinstance(sense, dict):
                 continue
             glosses = sense.get("glosses")
             if isinstance(glosses, list) and glosses:
-                key = tuple(str(g) for g in glosses)
-                self._merge_examples(index[key], sense)
+                key = tuple(str(g).lower().strip() for g in glosses)
+                if key in existing_glosses:
+                    # Same sense exists - merge examples only
+                    self._merge_examples(sense_index[key], sense)
+                else:
+                    # New sense - append it
+                    target_senses.append(copy.deepcopy(sense))
+                    existing_glosses.add(key)
+                    sense_index[key] = sense
             else:
+                # Non-list gloss or empty, append as-is
                 target_senses.append(copy.deepcopy(sense))
 
     def _merge_examples(self, target_sense: dict[str, Any], incoming_sense: dict[str, Any]) -> None:

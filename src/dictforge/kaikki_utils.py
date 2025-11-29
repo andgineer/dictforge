@@ -5,12 +5,14 @@ from datetime import datetime
 ALIASES = {
     # South Slavic
     "sr": "Serbo-Croatian",
+    "srp": "Serbian",
     "serbian": "Serbian",
     "srpski": "Serbian",
     "sc": "Serbo-Croatian",
     "serbo-croatian": "Serbo-Croatian",
     "hbs": "Serbo-Croatian",
     "hr": "Croatian",
+    "hrv": "Croatian",
     "croatian": "Croatian",
     "hrvatski": "Croatian",
     # English / Russian (no non-English text in code comments/strings)
@@ -31,6 +33,15 @@ LANG_MAP = {
     "Russian": ("ru", "Russian"),
 }
 
+# FreeDict ISO 639-3 codes for dictionary file names
+FREEDICT_ISO_CODES = {
+    "Serbian": "srp",
+    "Serbo-Croatian": "srp",
+    "Croatian": "hrv",
+    "English": "eng",
+    "Russian": "rus",
+}
+
 
 def normalize_input_name(name: str) -> str:
     """Collapse user input aliases to canonical Kaikki language names."""
@@ -44,6 +55,18 @@ def lang_meta(kaikki_name: str) -> tuple[str, str]:
     """Return ISO code and human-readable name for a Kaikki language label."""
     iso2, native = LANG_MAP.get(kaikki_name, (kaikki_name.lower()[:2], kaikki_name))
     return iso2, native
+
+
+def get_freedict_code(kaikki_name: str) -> str:
+    """Convert Kaikki language name to FreeDict ISO 639-3 code.
+
+    Args:
+        kaikki_name: Canonical Kaikki language name (e.g., "Serbian", "English")
+
+    Returns:
+        ISO 639-3 code used by FreeDict (e.g., "srp", "eng")
+    """
+    return FREEDICT_ISO_CODES.get(kaikki_name, kaikki_name.lower()[:3])
 
 
 def make_defaults(in_lang_kaikki: str, out_lang_kaikki: str) -> dict[str, str]:

@@ -59,6 +59,7 @@ def _fake_config(tmp_path: Path) -> dict[str, object]:
         "try_fix_inflections": False,
         "cache_dir": str(tmp_path / "cache"),
         "kindlegen_path": "",
+        "enable_freedict": False,  # Disable FreeDict for this test to keep it focused on Kaikki filtering
     }
 
 

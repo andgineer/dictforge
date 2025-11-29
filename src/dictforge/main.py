@@ -129,6 +129,19 @@ def _get_format_choices() -> str:
     show_default=True,
 )
 @click.option(
+    "--enable-freedict/--no-freedict",
+    default=None,
+    help="Enable FreeDict as secondary source (overrides config)",
+    show_default=_show_config_default("enable_freedict"),
+)
+@click.option(
+    "--freedict-only",
+    is_flag=True,
+    default=False,
+    help="Use only FreeDict source (skip Kaikki)",
+    show_default=True,
+)
+@click.option(
     "--version",
     "version",
     is_flag=True,
@@ -154,6 +167,8 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912,ARG001
     cache_dir: str | None,
     reset_cache: bool,
     compress: bool,
+    enable_freedict: bool | None,
+    freedict_only: bool,
     version: bool,
 ) -> None:
     """
@@ -251,7 +266,37 @@ def cli(  # noqa: PLR0913,PLR0915,C901,PLR0912,ARG001
     outdir_path = Path(outdir or dfl["outdir"])
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    b = Builder(cache_dir=cache_dir_val, show_progress=True)
+    # Handle FreeDict options
+    if freedict_only:
+        # Use only FreeDict source
+        from functools import partial
+
+        from .progress_bar import progress_bar
+        from .source_freedict import FreeDictSource
+
+        session = __import__("requests").Session()
+        show_progress_val = True
+        console_inst = Console(stderr=True, force_terminal=show_progress_val)
+        progress_factory = partial(
+            progress_bar,
+            console=console_inst,
+            enabled=show_progress_val,
+        )
+        freedict_source = FreeDictSource(
+            cache_dir=cache_dir_val,
+            session=session,
+            progress_factory=progress_factory,
+        )
+        b = Builder(cache_dir=cache_dir_val, show_progress=True, sources=[freedict_source])
+    else:
+        # Use default sources with FreeDict enabled/disabled
+        enable_freedict_val = cfg["enable_freedict"] if enable_freedict is None else enable_freedict
+        b = Builder(
+            cache_dir=cache_dir_val,
+            show_progress=True,
+            enable_freedict=enable_freedict_val,
+        )
+
     b.ensure_download_dirs(force=reset_cache)
 
     in_langs = [in_lang_norm] + merge_list
