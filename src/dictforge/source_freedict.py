@@ -878,9 +878,10 @@ class FreeDictSource(DictionarySource):
             print(msg, file=sys.stderr)
 
             # Build pivot translation map
+            # Use both exact word and normalized word as keys for better matching
             pivot_map: dict[str, list[str]] = {}
             for entry in second_pair_entries:
-                word_lower = entry.get("word", "").lower()
+                word_lower = entry.get("word", "").lower().strip()
                 glosses = []
                 for sense in entry.get("senses", []):
                     sense_glosses = sense.get("glosses", [])
@@ -888,11 +889,19 @@ class FreeDictSource(DictionarySource):
                         glosses.extend(sense_glosses)
                     elif isinstance(sense_glosses, str):
                         glosses.append(sense_glosses)
-                if glosses:
+                if glosses and word_lower:
+                    # Store by exact word
                     pivot_map[word_lower] = glosses
+                    # Also store by normalized word (remove common punctuation)
+                    normalized = re.sub(r"[.,;:!?()\[\]{}]", "", word_lower).strip()
+                    if normalized and normalized != word_lower and normalized not in pivot_map:
+                        # If normalized differs, store it too (but prefer exact match)
+                        pivot_map[normalized] = glosses
 
             # Build chained entries
             chained_entries = []
+            matched_count = 0
+            unmatched_count = 0
             for entry in first_pair_entries:
                 word = entry.get("word", "")
                 final_glosses: set[str] = set()
@@ -904,9 +913,40 @@ class FreeDictSource(DictionarySource):
                         sense_glosses = [sense_glosses]
 
                     for pivot_word in sense_glosses:
+                        if not isinstance(pivot_word, str):
+                            continue
                         pivot_lower = pivot_word.lower().strip()
+                        # Try exact match first
                         if pivot_lower in pivot_map:
                             final_glosses.update(pivot_map[pivot_lower])
+                        else:
+                            # Try normalized match (remove punctuation)
+                            normalized = re.sub(r"[.,;:!?()\[\]{}]", "", pivot_lower).strip()
+                            if normalized and normalized in pivot_map:
+                                final_glosses.update(pivot_map[normalized])
+                            else:
+                                # Try splitting on common separators
+                                # (e.g., "hello, world" -> "hello", "world")
+                                for part_raw in re.split(r"[,\s;]+", pivot_lower):
+                                    part = part_raw.strip()
+                                    if part and part in pivot_map:
+                                        final_glosses.update(pivot_map[part])
+
+                if final_glosses:
+                    matched_count += 1
+                    chained_entry = {
+                        "word": word,
+                        "pos": "noun",  # FreeDict doesn't provide POS, use default
+                        "senses": [
+                            {
+                                "glosses": sorted(final_glosses),
+                                "raw_glosses": sorted(final_glosses),
+                            },
+                        ],
+                    }
+                    chained_entries.append(chained_entry)
+                else:
+                    unmatched_count += 1
 
                 if final_glosses:
                     chained_entry = {
@@ -925,6 +965,15 @@ class FreeDictSource(DictionarySource):
             with cached_path.open("w", encoding="utf-8") as f:
                 for entry in chained_entries:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+            # Log statistics
+            total_first = len(first_pair_entries)
+            msg = (
+                f"\033[36m[dictforge] FreeDict: chained translation: "
+                f"{matched_count:,}/{total_first:,} entries matched "
+                f"({unmatched_count:,} unmatched)\033[0m"
+            )
+            print(msg, file=sys.stderr)
 
             return cached_path
 
