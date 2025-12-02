@@ -1,0 +1,3 @@
+[36m[dictforge] FreeDict: parsing StarDict files from /tmp/pytest-of-runner/pytest-0/test_transliteration_applied_i0/dict[0m
+[36m[dictforge] FreeDict: parsed 1 entries from srp-eng[0m
+[36m[dictforge] FreeDict: applied transliteration to 1 entries[0m
