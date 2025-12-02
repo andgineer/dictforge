@@ -28,6 +28,12 @@ HTTP_OK = 200
 MAX_DEBUG_FILES = 10
 MAX_DEBUG_SUBDIRS = 5
 TIMEOUT_SECONDS = 10
+# Debug sample sizes
+MAX_MATCHED_SAMPLES = 5
+MAX_UNMATCHED_SAMPLES = 10
+# Heuristic splitting thresholds
+MIN_LENGTH_FOR_HEURISTIC_SPLIT = 8
+MIN_PART_LENGTH = 4
 
 ProgressAdvance = Callable[[int], None]
 ProgressFactory = Callable[..., AbstractContextManager[ProgressAdvance]]
@@ -877,9 +883,37 @@ class FreeDictSource(DictionarySource):
             )
             print(msg, file=sys.stderr)
 
+            # Debug: analyze first pair entries
+            first_pair_words_with_glosses = 0
+            first_pair_english_words = set()
+            for entry in first_pair_entries[:100]:  # Sample first 100
+                for sense in entry.get("senses", []):
+                    sense_glosses = sense.get("glosses", [])
+                    if isinstance(sense_glosses, str):
+                        sense_glosses = [sense_glosses]
+                    if sense_glosses:
+                        first_pair_words_with_glosses += 1
+                        for gloss in sense_glosses:
+                            if isinstance(gloss, str):
+                                first_pair_english_words.add(gloss.lower().strip())
+            msg = (
+                f"\033[36m[dictforge] FreeDict: debug - first pair sample: "
+                f"{first_pair_words_with_glosses} senses with glosses, "
+                f"{len(first_pair_english_words)} unique English words (sample)\033[0m"
+            )
+            print(msg, file=sys.stderr)
+            if first_pair_english_words:
+                sample_words = list(first_pair_english_words)[:10]
+                msg = (
+                    f"\033[36m[dictforge] FreeDict: debug - sample English words: "
+                    f"{', '.join(sample_words)}\033[0m"
+                )
+                print(msg, file=sys.stderr)
+
             # Build pivot translation map
             # Use both exact word and normalized word as keys for better matching
             pivot_map: dict[str, list[str]] = {}
+            second_pair_words = set()
             for entry in second_pair_entries:
                 word_lower = entry.get("word", "").lower().strip()
                 glosses = []
@@ -890,6 +924,7 @@ class FreeDictSource(DictionarySource):
                     elif isinstance(sense_glosses, str):
                         glosses.append(sense_glosses)
                 if glosses and word_lower:
+                    second_pair_words.add(word_lower)
                     # Store by exact word
                     pivot_map[word_lower] = glosses
                     # Also store by normalized word (remove common punctuation)
@@ -898,10 +933,25 @@ class FreeDictSource(DictionarySource):
                         # If normalized differs, store it too (but prefer exact match)
                         pivot_map[normalized] = glosses
 
+            msg = (
+                f"\033[36m[dictforge] FreeDict: debug - pivot map has "
+                f"{len(pivot_map)} keys from {len(second_pair_words)} unique words\033[0m"
+            )
+            print(msg, file=sys.stderr)
+            if second_pair_words:
+                sample_words = list(second_pair_words)[:10]
+                msg = (
+                    f"\033[36m[dictforge] FreeDict: debug - sample pivot words: "
+                    f"{', '.join(sample_words)}\033[0m"
+                )
+                print(msg, file=sys.stderr)
+
             # Build chained entries
             chained_entries = []
             matched_count = 0
             unmatched_count = 0
+            unmatched_samples: list[str] = []
+            matched_samples: list[str] = []
             for entry in first_pair_entries:
                 word = entry.get("word", "")
                 final_glosses: set[str] = set()
@@ -919,21 +969,131 @@ class FreeDictSource(DictionarySource):
                         # Try exact match first
                         if pivot_lower in pivot_map:
                             final_glosses.update(pivot_map[pivot_lower])
-                        else:
-                            # Try normalized match (remove punctuation)
-                            normalized = re.sub(r"[.,;:!?()\[\]{}]", "", pivot_lower).strip()
-                            if normalized and normalized in pivot_map:
-                                final_glosses.update(pivot_map[normalized])
-                            else:
-                                # Try splitting on common separators
-                                # (e.g., "hello, world" -> "hello", "world")
-                                for part_raw in re.split(r"[,\s;]+", pivot_lower):
-                                    part = part_raw.strip()
-                                    if part and part in pivot_map:
-                                        final_glosses.update(pivot_map[part])
+                            continue
+
+                        # Try normalized match (remove punctuation)
+                        normalized = re.sub(r"[.,;:!?()\[\]{}]", "", pivot_lower).strip()
+                        if normalized and normalized in pivot_map:
+                            final_glosses.update(pivot_map[normalized])
+                            continue
+
+                        # Try splitting on common separators
+                        # (e.g., "hello, world" -> "hello", "world")
+                        parts = re.split(r"[,\s;]+", pivot_lower)
+                        found_match = False
+                        for part_raw in parts:
+                            part = part_raw.strip()
+                            if part and part in pivot_map:
+                                final_glosses.update(pivot_map[part])
+                                found_match = True
+                        if found_match:
+                            continue
+
+                        # Try splitting concatenated words (camelCase boundaries)
+                        # Examples: "YugoslavYugoslavian" -> ["yugoslav", "yugoslavian"]
+                        #          "EnglishmanSassenach" -> ["englishman", "sassenach"]
+                        # Split on CamelCase: lowercase/uppercase followed by uppercase
+                        # First, try on original case, then lowercase
+                        camel_case_split = re.split(r"(?<=[a-z])(?=[A-Z])", pivot_word)
+                        if len(camel_case_split) > 1:
+                            for split_word in camel_case_split:
+                                split_word_lower = split_word.lower().strip()
+                                if split_word_lower and split_word_lower in pivot_map:
+                                    final_glosses.update(pivot_map[split_word_lower])
+                                    found_match = True
+                            if found_match:
+                                continue
+
+                        # Try heuristic: split concatenated lowercase words
+                        # Look for patterns like "word1word2" where both parts might be words
+                        # Examples: "achepain", "colourdye", "citytown"
+                        if not found_match and pivot_lower.islower():
+                            # First, try common word boundaries
+                            # (common English word endings/startings)
+                            # Try splitting at positions where common words might start/end
+                            common_boundaries = []
+                            # Common word endings that might indicate a word boundary
+                            endings = [
+                                "ache",
+                                "pain",
+                                "colour",
+                                "dye",
+                                "city",
+                                "town",
+                                "box",
+                                "chest",
+                                "fog",
+                                "mist",
+                                "to",
+                                "at",
+                                "but",
+                                "however",
+                                "nevertheless",
+                                "yet",
+                            ]
+                            for ending in endings:
+                                if pivot_lower.endswith(ending) and len(pivot_lower) > len(ending):
+                                    split_pos = len(pivot_lower) - len(ending)
+                                    if split_pos >= MIN_PART_LENGTH:
+                                        common_boundaries.append(split_pos)
+
+                            # Try common word starts
+                            starts = [
+                                "to",
+                                "at",
+                                "but",
+                                "how",
+                                "never",
+                                "yet",
+                                "ache",
+                                "pain",
+                                "colour",
+                                "dye",
+                                "city",
+                                "town",
+                            ]
+                            for start in starts:
+                                if pivot_lower.startswith(start) and len(pivot_lower) > len(start):
+                                    split_pos = len(start)
+                                    if len(pivot_lower) - split_pos >= MIN_PART_LENGTH:
+                                        common_boundaries.append(split_pos)
+
+                            # Try all common boundaries first (more likely to be correct)
+                            for split_pos in sorted(set(common_boundaries)):
+                                part1 = pivot_lower[:split_pos]
+                                part2 = pivot_lower[split_pos:]
+                                if part1 in pivot_map:
+                                    final_glosses.update(pivot_map[part1])
+                                if part2 in pivot_map:
+                                    final_glosses.update(pivot_map[part2])
+                                if part1 in pivot_map or part2 in pivot_map:
+                                    found_match = True
+                                    break
+
+                            # If no match with common boundaries, try systematic splitting
+                            # for long words (minimum length check)
+                            if (
+                                not found_match
+                                and len(pivot_lower) > MIN_LENGTH_FOR_HEURISTIC_SPLIT
+                            ):
+                                # Try splitting at various positions
+                                for split_pos in range(
+                                    MIN_PART_LENGTH,
+                                    len(pivot_lower) - (MIN_PART_LENGTH - 1),
+                                ):
+                                    part1 = pivot_lower[:split_pos]
+                                    part2 = pivot_lower[split_pos:]
+                                    if part1 in pivot_map:
+                                        final_glosses.update(pivot_map[part1])
+                                    if part2 in pivot_map:
+                                        final_glosses.update(pivot_map[part2])
+                                    if part1 in pivot_map or part2 in pivot_map:
+                                        break
 
                 if final_glosses:
                     matched_count += 1
+                    if len(matched_samples) < MAX_MATCHED_SAMPLES:
+                        matched_samples.append(f"{word} -> {len(final_glosses)} glosses")
                     chained_entry = {
                         "word": word,
                         "pos": "noun",  # FreeDict doesn't provide POS, use default
@@ -947,6 +1107,18 @@ class FreeDictSource(DictionarySource):
                     chained_entries.append(chained_entry)
                 else:
                     unmatched_count += 1
+                    if len(unmatched_samples) < MAX_UNMATCHED_SAMPLES:
+                        # Collect sample of unmatched words and their English glosses
+                        sample_glosses = []
+                        for sense in entry.get("senses", []):
+                            sense_glosses = sense.get("glosses", [])
+                            if isinstance(sense_glosses, str):
+                                sense_glosses = [sense_glosses]
+                            sample_glosses.extend(sense_glosses[:2])  # First 2 glosses
+                        if sample_glosses:
+                            unmatched_samples.append(
+                                f"{word} (EN: {', '.join(str(g) for g in sample_glosses[:3])})",
+                            )
 
                 if final_glosses:
                     chained_entry = {
@@ -974,6 +1146,18 @@ class FreeDictSource(DictionarySource):
                 f"({unmatched_count:,} unmatched)\033[0m"
             )
             print(msg, file=sys.stderr)
+            if matched_samples:
+                msg = (
+                    f"\033[36m[dictforge] FreeDict: debug - matched samples: "
+                    f"{'; '.join(matched_samples)}\033[0m"
+                )
+                print(msg, file=sys.stderr)
+            if unmatched_samples:
+                msg = (
+                    f"\033[33m[dictforge] FreeDict: debug - unmatched samples: "
+                    f"{'; '.join(unmatched_samples)}\033[0m"
+                )
+                print(msg, file=sys.stderr)
 
             return cached_path
 
