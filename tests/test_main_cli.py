@@ -145,6 +145,68 @@ def test_cli_reset_cache_triggers_cleanup(monkeypatch, runner: CliRunner, tmp_pa
     assert calls["ensure_download_dirs"] is True
 
 
+def test_cli_options_after_languages(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:
+    """Test that options can be placed after language arguments."""
+    config = _base_config(tmp_path)
+    monkeypatch.setattr("dictforge.main.load_config", lambda: config)
+    monkeypatch.setattr("dictforge.main.guess_kindlegen_path", lambda: "/usr/bin/kindlegen")
+    monkeypatch.setattr(
+        "dictforge.main.make_defaults",
+        lambda *_: {
+            "title": "Title",
+            "shortname": "Short",
+            "outdir": str(tmp_path / "out"),
+            "in_code": "sr",
+            "out_code": "en",
+        },
+    )
+
+    calls: dict[str, object] = {}
+
+    class DummyBuilder:
+        def __init__(
+            self,
+            cache_dir: Path,
+            *,
+            show_progress: bool | None = None,
+            reset_cache: bool = False,
+            enable_freedict: bool = True,
+        ) -> None:
+            calls["cache_dir"] = cache_dir
+            calls["show_progress"] = show_progress
+            calls["reset_cache"] = reset_cache
+            calls["enable_freedict"] = enable_freedict
+
+        def ensure_download_dirs(self, force: bool = False) -> None:
+            calls["ensure_download_dirs"] = force
+
+        def build_dictionary(self, **_: object) -> dict[str, int]:  # pragma: no cover - simple stub
+            return {"Serbo-Croatian": 5}
+
+    monkeypatch.setattr("dictforge.main.Builder", DummyBuilder)
+
+    # Test: languages before options
+    result1 = runner.invoke(cli, ["sr", "ru", "--reset-cache"])
+    assert result1.exit_code == 0
+    assert calls["ensure_download_dirs"] is True
+
+    # Reset for next test
+    calls.clear()
+
+    # Test: options after languages (the new capability)
+    result2 = runner.invoke(cli, ["sr", "ru", "--reset-cache", "--format", "mobi"])
+    assert result2.exit_code == 0
+    assert calls["ensure_download_dirs"] is True
+
+    # Reset for next test
+    calls.clear()
+
+    # Test: options between languages (should also work)
+    result3 = runner.invoke(cli, ["sr", "--reset-cache", "ru"])
+    assert result3.exit_code == 0
+    assert calls["ensure_download_dirs"] is True
+
+
 def test_cli_download_error(monkeypatch, runner: CliRunner, tmp_path: Path) -> None:
     config = _base_config(tmp_path)
     monkeypatch.setattr("dictforge.main.load_config", lambda: config)

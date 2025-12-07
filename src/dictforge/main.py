@@ -57,7 +57,13 @@ def _get_format_choices() -> str:
     return ", ".join(get_available_formats().keys())
 
 
-@click.group(invoke_without_command=True, context_settings={"ignore_unknown_options": False})
+@click.group(
+    invoke_without_command=True,
+    context_settings={
+        "ignore_unknown_options": False,
+        "allow_interspersed_args": True,
+    },
+)
 @click.argument("in_lang", required=False)
 @click.argument("out_lang", required=False)
 @click.option(
