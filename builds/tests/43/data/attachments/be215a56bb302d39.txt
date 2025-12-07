@@ -1,0 +1,44 @@
+ Initializing FreeDict source
+ FreeDict source enabled
+[36m[dictforge] FreeDict: looking for srp-eng dictionary[0m
+[36m[dictforge] FreeDict: found versions for srp-eng: 0.2, 0.1.3, 0.1.2[0m
+[36m[dictforge] FreeDict: fetching directory listing from https://download.freedict.org/dictionaries/srp-eng/0.2/[0m
+[36m[dictforge] FreeDict: found file freedict-srp-eng-0.2.stardict.tar.xz[0m
+[36m[dictforge] FreeDict: downloading https://download.freedict.org/dictionaries/srp-eng/0.2/freedict-srp-eng-0.2.stardict.tar.xz[0m
+[36m[dictforge] FreeDict: downloaded srp-eng-0.2.tar.xz[0m
+[36m[dictforge] FreeDict: extracting srp-eng-0.2.tar.xz[0m
+[36m[dictforge] FreeDict: searching for StarDict files in /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/srp-eng/0.2[0m
+[36m[dictforge] FreeDict: extract_dir contains 1 items: ['srp-eng'][0m
+[36m[dictforge] FreeDict: checking root /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/srp-eng/0.2 for StarDict files[0m
+[36m[dictforge] FreeDict: 0.2 contains: ['srp-eng'][0m
+[36m[dictforge] FreeDict: searching 1 subdirectories[0m
+[36m[dictforge] FreeDict: checking srp-eng[0m
+[36m[dictforge] FreeDict: found .ifo file 'srp-eng.ifo', base_name='srp-eng'[0m
+[36m[dictforge] FreeDict: srp-eng has 6 files: ['srp-eng.idx.gz', 'srp-eng.ifo', 'INSTALL', 'COPYING', 'srp-eng.dict.dz', 'README'][0m
+[36m[dictforge] FreeDict: looking for 'srp-eng.idx/.idx.gz' (found=True), 'srp-eng.dict.dz/.dict' (found=True)[0m
+[36m[dictforge] FreeDict: found StarDict files in srp-eng[0m
+[36m[dictforge] FreeDict: found StarDict files in /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/srp-eng/0.2/srp-eng[0m
+[36m[dictforge] FreeDict: parsing StarDict files from /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/srp-eng/0.2/srp-eng[0m
+[36m[dictforge] FreeDict: parsed 395 entries from srp-eng[0m
+[36m[dictforge] FreeDict: applied transliteration to 395 entries[0m
+[36m[dictforge] FreeDict: looking for hrv-eng dictionary[0m
+[36m[dictforge] FreeDict: found versions for hrv-eng: 0.1.2, 0.1.1, 0.1[0m
+[36m[dictforge] FreeDict: fetching directory listing from https://download.freedict.org/dictionaries/hrv-eng/0.1.2/[0m
+[36m[dictforge] FreeDict: found file freedict-hrv-eng-0.1.2.stardict.tar.xz[0m
+[36m[dictforge] FreeDict: downloading https://download.freedict.org/dictionaries/hrv-eng/0.1.2/freedict-hrv-eng-0.1.2.stardict.tar.xz[0m
+[36m[dictforge] FreeDict: downloaded hrv-eng-0.1.2.tar.xz[0m
+[36m[dictforge] FreeDict: extracting hrv-eng-0.1.2.tar.xz[0m
+[36m[dictforge] FreeDict: searching for StarDict files in /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/hrv-eng/0.1.2[0m
+[36m[dictforge] FreeDict: extract_dir contains 1 items: ['hrv-eng'][0m
+[36m[dictforge] FreeDict: checking root /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/hrv-eng/0.1.2 for StarDict files[0m
+[36m[dictforge] FreeDict: 0.1.2 contains: ['hrv-eng'][0m
+[36m[dictforge] FreeDict: searching 1 subdirectories[0m
+[36m[dictforge] FreeDict: checking hrv-eng[0m
+[36m[dictforge] FreeDict: found .ifo file 'hrv-eng.ifo', base_name='hrv-eng'[0m
+[36m[dictforge] FreeDict: hrv-eng has 6 files: ['hrv-eng.ifo', 'INSTALL', 'COPYING', 'hrv-eng.idx.gz', 'hrv-eng.dict.dz', 'README'][0m
+[36m[dictforge] FreeDict: looking for 'hrv-eng.idx/.idx.gz' (found=True), 'hrv-eng.dict.dz/.dict' (found=True)[0m
+[36m[dictforge] FreeDict: found StarDict files in hrv-eng[0m
+[36m[dictforge] FreeDict: found StarDict files in /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/hrv-eng/0.1.2/hrv-eng[0m
+[36m[dictforge] FreeDict: parsing StarDict files from /tmp/pytest-of-runner/pytest-0/test_builder_logs_skipped_entr0/cache/freedict/hrv-eng/0.1.2/hrv-eng[0m
+[36m[dictforge] FreeDict: parsed 79808 entries from hrv-eng[0m
+[36m[dictforge] FreeDict: loaded 79,688 entries for Serbian → English[0m

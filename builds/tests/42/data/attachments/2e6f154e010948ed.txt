@@ -1,0 +1,10 @@
+[36m[dictforge] FreeDict: checking root /tmp/pytest-of-runner/pytest-0/test_find_stardict_dir_in_subd0 for StarDict files[0m
+[36m[dictforge] FreeDict: test_find_stardict_dir_in_subd0 contains: ['dict'][0m
+[36m[dictforge] FreeDict: searching 2 subdirectories[0m
+[36m[dictforge] FreeDict: checking dict[0m
+[36m[dictforge] FreeDict: dict contains: ['files'][0m
+[36m[dictforge] FreeDict: checking dict/files[0m
+[36m[dictforge] FreeDict: found .ifo file 'test.ifo', base_name='test'[0m
+[36m[dictforge] FreeDict: files has 3 files: ['test.ifo', 'test.idx', 'test.dict.dz'][0m
+[36m[dictforge] FreeDict: looking for 'test.idx/.idx.gz' (found=True), 'test.dict.dz/.dict' (found=True)[0m
+[36m[dictforge] FreeDict: found StarDict files in dict/files[0m
