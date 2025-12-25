@@ -11,8 +11,10 @@ def get_allowed_doc_languages():
     try:
         with open(build_docs_file_name, "r") as f:
             for line in f:
-                if "for lang in" in line:
-                    langs = line.split("in")[1].strip().split(";")[0].split()
+                if "LANGUAGES=" in line:
+                    value = line.split("=", 1)[1].strip()
+                    value = value.strip('"').strip("'")
+                    langs = value.split()
                     return [lang.strip() for lang in langs]
     except FileNotFoundError:
         print(f"No {build_docs_file_name} file found")
@@ -53,11 +55,7 @@ def docs_task_factory(language: str):
     def docs(c: Context):
         """Docs preview for the language specified."""
         c.run("open -a 'Google Chrome' http://127.0.0.1:8000/dictforge/")
-        c.run(f"scripts/docs-render-config.sh {language}")
-        if language != "en":
-            shutil.rmtree(f"./docs/src/{language}/images", ignore_errors=True)
-            shutil.copytree("./docs/src/en/images", f"./docs/src/{language}/images")
-            shutil.copy("./docs/src/en/reference.md", f"./docs/src/{language}/reference.md")
+        c.run(f"scripts/build-docs.sh --copy-assets {language}")
         c.run("mkdocs serve -f docs/_mkdocs.yml")
 
     return docs
