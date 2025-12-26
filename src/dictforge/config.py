@@ -55,7 +55,7 @@ def save_config(data: dict[str, Any]) -> None:
         else:
             s = str(v).replace("\\", "\\\\").replace('"', '\\"')
             val = f'"{s}"'
-        lines.append(f"{k} = {val}")
+        lines.append(f"{k} = {val}")  # type: ignore[arg-type]
     content = "\n".join(lines) + "\n"
     with config_path().open("w", encoding="utf-8") as f:
         f.write(content)

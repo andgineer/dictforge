@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Aliases: user input -> Kaikki language names
 ALIASES = {
@@ -73,7 +73,7 @@ def make_defaults(in_lang_kaikki: str, out_lang_kaikki: str) -> dict[str, str]:
     """Generate default metadata (title, codes, output dir) for CLI invocations."""
     in_code, in_native = lang_meta(in_lang_kaikki)
     out_code, out_native = lang_meta(out_lang_kaikki)
-    today = datetime.utcnow().strftime("%Y%m%d")
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
     title = f"{in_native} → {out_native} (andgineer/dictforge)"
     short = {
         ("sr", "en"): "SR→EN",

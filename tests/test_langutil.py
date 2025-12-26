@@ -1,4 +1,4 @@
-from datetime import datetime as real_datetime
+from datetime import datetime as real_datetime, timezone
 
 from dictforge.kaikki_utils import LANG_MAP, lang_meta, make_defaults, normalize_input_name
 
@@ -21,7 +21,7 @@ def test_lang_meta_known_and_unknown() -> None:
 def test_make_defaults_generates_expected_fields(monkeypatch) -> None:
     class DummyDatetime:
         @classmethod
-        def utcnow(cls) -> real_datetime:
+        def now(cls, tz: timezone | None = None) -> real_datetime:
             return real_datetime(2024, 1, 2)
 
     monkeypatch.setattr("dictforge.kaikki_utils.datetime", DummyDatetime)
