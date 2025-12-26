@@ -1,0 +1,2 @@
+ Initializing FreeDict source
+ FreeDict source enabled

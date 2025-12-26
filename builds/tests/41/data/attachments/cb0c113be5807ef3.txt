@@ -1,0 +1,5 @@
+
+
+ Serbian → English: 1 entries → 
+/tmp/pytest-of-runner/pytest-0/test_stardict_export_creates_f0/out/Serbian_Engli
+sh/Serbian_English.ifo

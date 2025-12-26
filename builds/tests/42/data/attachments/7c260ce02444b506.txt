@@ -1,0 +1,3 @@
+[36m[dictforge] FreeDict: found .ifo file 'test.ifo', base_name='test'[0m
+[36m[dictforge] FreeDict: test_has_stardict_files_with_p0 has 3 files: ['test.dict', 'test.ifo', 'test.idx'][0m
+[36m[dictforge] FreeDict: looking for 'test.idx/.idx.gz' (found=True), 'test.dict.dz/.dict' (found=True)[0m
