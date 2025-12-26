@@ -1,2 +1,0 @@
- Kindle Previewer fallback: fixing metadata and retrying
- Serbian → English: 1 entries
