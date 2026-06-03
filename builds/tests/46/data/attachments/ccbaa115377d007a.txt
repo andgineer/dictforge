@@ -1,0 +1,1 @@
+[36m[dictforge] FreeDict: found version 0.2 for srp-eng[0m
