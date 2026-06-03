@@ -1,0 +1,4 @@
+ Initializing FreeDict source
+ FreeDict source enabled
+ Serbian → English: 2 entries → 
+/tmp/pytest-of-runner/pytest-0/test_export_one_success0/out/Serbian-English.mobi
